@@ -24,3 +24,10 @@ spring:
       hibernate:
         show_sql: true
         format_sql: true
+
+app:
+  rabbitmq:
+    exchange: market-data.exchange
+    queue: market-data.persist.queue
+    routing-key: "*.ticker.#"
+    nack-requeue: true
