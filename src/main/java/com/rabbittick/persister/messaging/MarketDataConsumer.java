@@ -13,10 +13,13 @@ import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.rabbitmq.client.Channel;
+import com.rabbittick.persister.domain.trade.TradeService;
 import com.rabbittick.persister.domain.ticker.TickerService;
 import com.rabbittick.persister.global.dto.MarketDataMessage;
 import com.rabbittick.persister.global.dto.TickerPayload;
+import com.rabbittick.persister.global.dto.TradePayload;
 
 /**
  * RabbitMQ에서 시장 데이터 메시지를 소비하는 리스너.
@@ -24,16 +27,18 @@ import com.rabbittick.persister.global.dto.TickerPayload;
  * 주요 책임:
  *
  * 수신 메시지 역직렬화
- * 데이터 타입 분기 처리 (ticker만 허용)
+ * 데이터 타입 분기 처리 (ticker/trade)
  * DB 저장 처리 및 Ack/Nack 정책 적용
  * 예외 및 멱등성 처리 로그 기록
  */
 @Component
 public class MarketDataConsumer {
+
 	private static final Logger log = LoggerFactory.getLogger(MarketDataConsumer.class);
 
 	private final ObjectMapper objectMapper;
 	private final TickerService tickerService;
+	private final TradeService tradeService;
 	private final boolean nackRequeue;
 
 	/**
@@ -41,15 +46,18 @@ public class MarketDataConsumer {
 	 *
 	 * @param objectMapper JSON 변환기
 	 * @param tickerService 티커 저장 서비스
+	 * @param tradeService 거래 체결 저장 서비스
 	 * @param nackRequeue Nack 시 재큐잉 여부
 	 */
 	public MarketDataConsumer(
 		ObjectMapper objectMapper,
 		TickerService tickerService,
+		TradeService tradeService,
 		@Value("${app.rabbitmq.nack-requeue:true}") boolean nackRequeue
 	) {
 		this.objectMapper = objectMapper;
 		this.tickerService = tickerService;
+		this.tradeService = tradeService;
 		this.nackRequeue = nackRequeue;
 	}
 
@@ -64,28 +72,41 @@ public class MarketDataConsumer {
 		queues = "${app.rabbitmq.queue}",
 		containerFactory = "rabbitListenerContainerFactory"
 	)
-	public void handleMessage(Message message, Channel channel) throws IOException {
+	public void handleMarketDataMessage(Message message, Channel channel) throws IOException {
 		long deliveryTag = message.getMessageProperties().getDeliveryTag();
 		String body = new String(message.getBody(), StandardCharsets.UTF_8);
 
 		try {
 			String normalizedBody = normalizeBody(body);
-			MarketDataMessage<TickerPayload> marketDataMessage = objectMapper.readValue(
-				normalizedBody,
-				new TypeReference<MarketDataMessage<TickerPayload>>() {}
-			);
-
-			if (marketDataMessage.getMetadata() == null
-				|| !isTickerType(marketDataMessage.getMetadata().getDataType())) {
-				log.warn("지원하지 않는 dataType 입니다. messageBody={}", body);
+			JsonNode rootNode = objectMapper.readTree(normalizedBody);
+			String dataType = extractDataType(rootNode);
+			if (dataType == null) {
+				log.warn("metadata.dataType이 누락되었습니다. messageBody={}", body);
 				channel.basicAck(deliveryTag, false);
 				return;
 			}
 
-			tickerService.saveTicker(marketDataMessage);
+			if (isTickerType(dataType)) {
+				MarketDataMessage<TickerPayload> marketDataMessage = objectMapper.readValue(
+					normalizedBody,
+					new TypeReference<MarketDataMessage<TickerPayload>>() {}
+				);
+				tickerService.saveTicker(marketDataMessage);
+			} else if (isTradeType(dataType)) {
+				MarketDataMessage<TradePayload> marketDataMessage = objectMapper.readValue(
+					normalizedBody,
+					new TypeReference<MarketDataMessage<TradePayload>>() {}
+				);
+				tradeService.saveTrade(marketDataMessage);
+			} else {
+				log.warn("지원하지 않는 dataType 입니다. dataType={}, messageBody={}", dataType, body);
+				channel.basicAck(deliveryTag, false);
+				return;
+			}
+
 			channel.basicAck(deliveryTag, false);
 		} catch (DataIntegrityViolationException ex) {
-			log.warn("중복 티커 데이터로 판단되어 저장을 생략합니다. messageBody={}", body, ex);
+			log.warn("중복 데이터로 판단되어 저장을 생략합니다. messageBody={}", body, ex);
 			channel.basicAck(deliveryTag, false);
 		} catch (Exception ex) {
 			log.error("메시지 처리에 실패했습니다. messageBody={}", body, ex);
@@ -95,6 +116,34 @@ public class MarketDataConsumer {
 
 	private boolean isTickerType(String dataType) {
 		return dataType != null && dataType.equalsIgnoreCase("TICKER");
+	}
+
+	/**
+	 * trade 타입 여부를 확인한다.
+	 *
+	 * @param dataType 데이터 타입
+	 * @return trade 타입 여부
+	 */
+	private boolean isTradeType(String dataType) {
+		return dataType != null && dataType.equalsIgnoreCase("TRADE");
+	}
+
+	/**
+	 * metadata에서 dataType을 추출한다.
+	 *
+	 * @param rootNode 메시지 루트 노드
+	 * @return dataType 문자열 (없으면 null)
+	 */
+	private String extractDataType(JsonNode rootNode) {
+		JsonNode metadataNode = rootNode.get("metadata");
+		if (metadataNode == null) {
+			return null;
+		}
+		JsonNode dataTypeNode = metadataNode.get("dataType");
+		if (dataTypeNode == null || dataTypeNode.isNull()) {
+			return null;
+		}
+		return dataTypeNode.asText();
 	}
 
 	/**
