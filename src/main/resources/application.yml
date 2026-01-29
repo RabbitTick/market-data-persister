@@ -29,5 +29,6 @@ app:
   rabbitmq:
     exchange: market-data.exchange
     queue: market-data.persist.queue
-    routing-key: "*.ticker.#"
+    routing-key-ticker: "*.ticker.#"
+    routing-key-trade: "*.trade.#"
     nack-requeue: true
