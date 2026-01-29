@@ -10,7 +10,7 @@ description = 'Consumes RabbitMQ messages and stores market data into the databa
 
 java {
 	toolchain {
-		languageVersion = JavaLanguageVersion.of(17)
+		languageVersion = JavaLanguageVersion.of(21)
 	}
 }
 
