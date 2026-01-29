@@ -22,15 +22,18 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 public class RabbitMqConfig {
-	
+
 	@Value("${app.rabbitmq.exchange}")
 	private String exchangeName;
 
 	@Value("${app.rabbitmq.queue}")
 	private String queueName;
 
-	@Value("${app.rabbitmq.routing-key}")
-	private String routingKey;
+	@Value("${app.rabbitmq.routing-key-ticker:*.ticker.#}")
+	private String tickerRoutingKey;
+
+	@Value("${app.rabbitmq.routing-key-trade:*.trade.#}")
+	private String tradeRoutingKey;
 
 	/**
 	 * Exchange/Queue/Binding 토폴로지를 생성한다.
@@ -41,8 +44,9 @@ public class RabbitMqConfig {
 	public Declarables marketDataTopology() {
 		Queue queue = new Queue(queueName, true);
 		TopicExchange exchange = new TopicExchange(exchangeName, true, false);
-		Binding binding = BindingBuilder.bind(queue).to(exchange).with(routingKey);
-		return new Declarables(exchange, queue, binding);
+		Binding tickerBinding = BindingBuilder.bind(queue).to(exchange).with(tickerRoutingKey);
+		Binding tradeBinding = BindingBuilder.bind(queue).to(exchange).with(tradeRoutingKey);
+		return new Declarables(exchange, queue, tickerBinding, tradeBinding);
 	}
 
 	/**
