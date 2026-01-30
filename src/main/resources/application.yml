@@ -31,4 +31,5 @@ app:
     queue: market-data.persist.queue
     routing-key-ticker: "*.ticker.#"
     routing-key-trade: "*.trade.#"
+    routing-key-orderbook: "*.orderbook.#"
     nack-requeue: true
