@@ -15,9 +15,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.rabbitmq.client.Channel;
+import com.rabbittick.persister.domain.orderbook.OrderBookService;
 import com.rabbittick.persister.domain.trade.TradeService;
 import com.rabbittick.persister.domain.ticker.TickerService;
 import com.rabbittick.persister.global.dto.MarketDataMessage;
+import com.rabbittick.persister.global.dto.OrderBookPayload;
 import com.rabbittick.persister.global.dto.TickerPayload;
 import com.rabbittick.persister.global.dto.TradePayload;
 
@@ -27,7 +29,7 @@ import com.rabbittick.persister.global.dto.TradePayload;
  * 주요 책임:
  *
  * 수신 메시지 역직렬화
- * 데이터 타입 분기 처리 (ticker/trade)
+ * 데이터 타입 분기 처리 (ticker/trade/orderbook)
  * DB 저장 처리 및 Ack/Nack 정책 적용
  * 예외 및 멱등성 처리 로그 기록
  */
@@ -39,6 +41,7 @@ public class MarketDataConsumer {
 	private final ObjectMapper objectMapper;
 	private final TickerService tickerService;
 	private final TradeService tradeService;
+	private final OrderBookService orderBookService;
 	private final boolean nackRequeue;
 
 	/**
@@ -47,17 +50,20 @@ public class MarketDataConsumer {
 	 * @param objectMapper JSON 변환기
 	 * @param tickerService 티커 저장 서비스
 	 * @param tradeService 거래 체결 저장 서비스
+	 * @param orderBookService 호가 저장 서비스
 	 * @param nackRequeue Nack 시 재큐잉 여부
 	 */
 	public MarketDataConsumer(
 		ObjectMapper objectMapper,
 		TickerService tickerService,
 		TradeService tradeService,
+		OrderBookService orderBookService,
 		@Value("${app.rabbitmq.nack-requeue:true}") boolean nackRequeue
 	) {
 		this.objectMapper = objectMapper;
 		this.tickerService = tickerService;
 		this.tradeService = tradeService;
+		this.orderBookService = orderBookService;
 		this.nackRequeue = nackRequeue;
 	}
 
@@ -77,29 +83,35 @@ public class MarketDataConsumer {
 		String body = new String(message.getBody(), StandardCharsets.UTF_8);
 
 		try {
-			String normalizedBody = normalizeBody(body);
-			JsonNode rootNode = objectMapper.readTree(normalizedBody);
-			String dataType = extractDataType(rootNode);
-			if (dataType == null) {
+			String normalizedJson = normalizeBody(body);
+			JsonNode rootNode = objectMapper.readTree(normalizedJson);
+			String messageType = extractDataType(rootNode);
+			if (messageType == null) {
 				log.warn("metadata.dataType이 누락되었습니다. messageBody={}", body);
 				channel.basicAck(deliveryTag, false);
 				return;
 			}
 
-			if (isTickerType(dataType)) {
+			if (isTickerType(messageType)) {
 				MarketDataMessage<TickerPayload> marketDataMessage = objectMapper.readValue(
-					normalizedBody,
+					normalizedJson,
 					new TypeReference<MarketDataMessage<TickerPayload>>() {}
 				);
 				tickerService.saveTicker(marketDataMessage);
-			} else if (isTradeType(dataType)) {
+			} else if (isTradeType(messageType)) {
 				MarketDataMessage<TradePayload> marketDataMessage = objectMapper.readValue(
-					normalizedBody,
+					normalizedJson,
 					new TypeReference<MarketDataMessage<TradePayload>>() {}
 				);
 				tradeService.saveTrade(marketDataMessage);
+			} else if (isOrderBookType(messageType)) {
+				MarketDataMessage<OrderBookPayload> marketDataMessage = objectMapper.readValue(
+					normalizedJson,
+					new TypeReference<MarketDataMessage<OrderBookPayload>>() {}
+				);
+				orderBookService.saveOrderBook(marketDataMessage);
 			} else {
-				log.warn("지원하지 않는 dataType 입니다. dataType={}, messageBody={}", dataType, body);
+				log.warn("지원하지 않는 dataType 입니다. dataType={}, messageBody={}", messageType, body);
 				channel.basicAck(deliveryTag, false);
 				return;
 			}
@@ -126,6 +138,16 @@ public class MarketDataConsumer {
 	 */
 	private boolean isTradeType(String dataType) {
 		return dataType != null && dataType.equalsIgnoreCase("TRADE");
+	}
+
+	/**
+	 * orderbook 타입 여부를 확인한다.
+	 *
+	 * @param dataType 데이터 타입
+	 * @return orderbook 타입 여부
+	 */
+	private boolean isOrderBookType(String dataType) {
+		return dataType != null && dataType.equalsIgnoreCase("ORDERBOOK");
 	}
 
 	/**
