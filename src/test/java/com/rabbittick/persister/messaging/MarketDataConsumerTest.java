@@ -17,10 +17,15 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.Channel;
+import java.util.List;
+
+import com.rabbittick.persister.domain.orderbook.OrderBookService;
 import com.rabbittick.persister.domain.trade.TradeService;
 import com.rabbittick.persister.domain.ticker.TickerService;
 import com.rabbittick.persister.global.dto.MarketDataMessage;
 import com.rabbittick.persister.global.dto.Metadata;
+import com.rabbittick.persister.global.dto.OrderBookPayload;
+import com.rabbittick.persister.global.dto.OrderBookUnitPayload;
 import com.rabbittick.persister.global.dto.TickerPayload;
 import com.rabbittick.persister.global.dto.TradePayload;
 
@@ -34,6 +39,9 @@ class MarketDataConsumerTest {
 	private TradeService tradeService;
 
 	@Mock
+	private OrderBookService orderBookService;
+
+	@Mock
 	private Channel channel;
 
 	private ObjectMapper objectMapper;
@@ -43,7 +51,7 @@ class MarketDataConsumerTest {
 	@BeforeEach
 	void setUp() {
 		objectMapper = new ObjectMapper().findAndRegisterModules();
-		consumer = new MarketDataConsumer(objectMapper, tickerService, tradeService, true);
+		consumer = new MarketDataConsumer(objectMapper, tickerService, tradeService, orderBookService, true);
 	}
 
 	@Test
@@ -70,6 +78,19 @@ class MarketDataConsumerTest {
 		// then
 		verify(tradeService).saveTrade(any());
 		verify(channel).basicAck(6L, false);
+	}
+
+	@Test
+	void handleMessage_ackOnOrderBook() throws Exception {
+		// given
+		Message message = buildJsonMessage(buildOrderBookMessage("ORDERBOOK"), 11L);
+
+		// when
+		consumer.handleMarketDataMessage(message, channel);
+
+		// then
+		verify(orderBookService).saveOrderBook(any());
+		verify(channel).basicAck(11L, false);
 	}
 
 	@Test
@@ -101,9 +122,23 @@ class MarketDataConsumerTest {
 	}
 
 	@Test
+	void handleMessage_ackOnDuplicateOrderBook() throws Exception {
+		// given
+		Message message = buildJsonMessage(buildOrderBookMessage("ORDERBOOK"), 12L);
+		doThrow(new DataIntegrityViolationException("duplicate"))
+			.when(orderBookService).saveOrderBook(any());
+
+		// when
+		consumer.handleMarketDataMessage(message, channel);
+
+		// then
+		verify(channel).basicAck(12L, false);
+	}
+
+	@Test
 	void handleMessage_ackOnUnsupportedType() throws Exception {
 		// given
-		Message message = buildJsonMessage(buildTickerMessage("ORDERBOOK"), 9L);
+		Message message = buildJsonMessage(buildTickerMessage("UNKNOWN"), 9L);
 
 		// when
 		consumer.handleMarketDataMessage(message, channel);
@@ -167,6 +202,21 @@ class MarketDataConsumerTest {
 		verify(channel).basicAck(7L, false);
 	}
 
+	@Test
+	void handleMessage_acceptsStringWrappedJsonForOrderBook() throws Exception {
+		// given
+		String json = objectMapper.writeValueAsString(buildOrderBookMessage("ORDERBOOK"));
+		String wrapped = objectMapper.writeValueAsString(json);
+		Message message = buildRawMessage(wrapped, 13L);
+
+		// when
+		consumer.handleMarketDataMessage(message, channel);
+
+		// then
+		verify(orderBookService).saveOrderBook(any());
+		verify(channel).basicAck(13L, false);
+	}
+
 	private MarketDataMessage<TickerPayload> buildTickerMessage(String dataType) {
 		Metadata metadata = Metadata.builder()
 			.messageId("ticker-message-id")
@@ -219,6 +269,41 @@ class MarketDataConsumerTest {
 			.bestBidPrice(new BigDecimal("69990000.00"))
 			.bestBidSize(new BigDecimal("1.2"))
 			.streamType("SNAPSHOT")
+			.build();
+
+		return new MarketDataMessage<>(metadata, payload);
+	}
+
+	private MarketDataMessage<OrderBookPayload> buildOrderBookMessage(String dataType) {
+		Metadata metadata = Metadata.builder()
+			.messageId("orderbook-message-id")
+			.exchange("UPBIT")
+			.dataType(dataType)
+			.collectedAt("2025-08-28T16:49:00.123Z")
+			.version("1.0")
+			.build();
+
+		List<OrderBookUnitPayload> units = List.of(
+			OrderBookUnitPayload.builder()
+				.askPrice(new BigDecimal("70010000.00"))
+				.askSize(new BigDecimal("1.0"))
+				.bidPrice(new BigDecimal("69990000.00"))
+				.bidSize(new BigDecimal("1.2"))
+				.build(),
+			OrderBookUnitPayload.builder()
+				.askPrice(new BigDecimal("70020000.00"))
+				.askSize(new BigDecimal("0.8"))
+				.bidPrice(new BigDecimal("69980000.00"))
+				.bidSize(new BigDecimal("1.1"))
+				.build()
+		);
+
+		OrderBookPayload payload = OrderBookPayload.builder()
+			.marketCode("KRW-BTC")
+			.timestamp(1672531200000L)
+			.totalAskSize(new BigDecimal("10.5"))
+			.totalBidSize(new BigDecimal("9.8"))
+			.orderbookUnits(units)
 			.build();
 
 		return new MarketDataMessage<>(metadata, payload);
