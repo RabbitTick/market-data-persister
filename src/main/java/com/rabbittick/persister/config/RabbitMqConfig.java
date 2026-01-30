@@ -35,6 +35,9 @@ public class RabbitMqConfig {
 	@Value("${app.rabbitmq.routing-key-trade:*.trade.#}")
 	private String tradeRoutingKey;
 
+	@Value("${app.rabbitmq.routing-key-orderbook:*.orderbook.#}")
+	private String orderBookRoutingKey;
+
 	/**
 	 * Exchange/Queue/Binding 토폴로지를 생성한다.
 	 *
@@ -46,7 +49,8 @@ public class RabbitMqConfig {
 		TopicExchange exchange = new TopicExchange(exchangeName, true, false);
 		Binding tickerBinding = BindingBuilder.bind(queue).to(exchange).with(tickerRoutingKey);
 		Binding tradeBinding = BindingBuilder.bind(queue).to(exchange).with(tradeRoutingKey);
-		return new Declarables(exchange, queue, tickerBinding, tradeBinding);
+		Binding orderBookBinding = BindingBuilder.bind(queue).to(exchange).with(orderBookRoutingKey);
+		return new Declarables(exchange, queue, tickerBinding, tradeBinding, orderBookBinding);
 	}
 
 	/**
