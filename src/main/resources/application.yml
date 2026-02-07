@@ -33,3 +33,7 @@ app:
     routing-key-trade: "*.trade.#"
     routing-key-orderbook: "*.orderbook.#"
     nack-requeue: true
+    concurrent-consumers: 2
+    max-concurrent-consumers: 4
+    prefetch-count: 50
+    listener-concurrency: 2-4

@@ -38,6 +38,15 @@ public class RabbitMqConfig {
 	@Value("${app.rabbitmq.routing-key-orderbook:*.orderbook.#}")
 	private String orderBookRoutingKey;
 
+	@Value("${app.rabbitmq.concurrent-consumers:2}")
+	private int concurrentConsumers;
+
+	@Value("${app.rabbitmq.max-concurrent-consumers:4}")
+	private int maxConcurrentConsumers;
+
+	@Value("${app.rabbitmq.prefetch-count:50}")
+	private int prefetchCount;
+
 	/**
 	 * Exchange/Queue/Binding 토폴로지를 생성한다.
 	 *
@@ -64,6 +73,9 @@ public class RabbitMqConfig {
 		SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
 		factory.setConnectionFactory(connectionFactory);
 		factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+		factory.setConcurrentConsumers(concurrentConsumers);
+		factory.setMaxConcurrentConsumers(maxConcurrentConsumers);
+		factory.setPrefetchCount(prefetchCount);
 		return factory;
 	}
 }
