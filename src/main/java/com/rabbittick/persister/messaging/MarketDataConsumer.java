@@ -76,7 +76,8 @@ public class MarketDataConsumer {
 	 */
 	@RabbitListener(
 		queues = "${app.rabbitmq.queue}",
-		containerFactory = "rabbitListenerContainerFactory"
+		containerFactory = "rabbitListenerContainerFactory",
+		concurrency = "${app.rabbitmq.listener-concurrency:2-4}"
 	)
 	public void handleMarketDataMessage(Message message, Channel channel) throws IOException {
 		long deliveryTag = message.getMessageProperties().getDeliveryTag();
