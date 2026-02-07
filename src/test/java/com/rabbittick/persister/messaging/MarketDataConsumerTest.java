@@ -28,6 +28,8 @@ import com.rabbittick.persister.global.dto.OrderBookPayload;
 import com.rabbittick.persister.global.dto.OrderBookUnitPayload;
 import com.rabbittick.persister.global.dto.TickerPayload;
 import com.rabbittick.persister.global.dto.TradePayload;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 @ExtendWith(MockitoExtension.class)
 class MarketDataConsumerTest {
@@ -47,11 +49,21 @@ class MarketDataConsumerTest {
 	private ObjectMapper objectMapper;
 
 	private MarketDataConsumer consumer;
+	
+	private MeterRegistry meterRegistry;
 
 	@BeforeEach
 	void setUp() {
 		objectMapper = new ObjectMapper().findAndRegisterModules();
-		consumer = new MarketDataConsumer(objectMapper, tickerService, tradeService, orderBookService, true);
+		meterRegistry = new SimpleMeterRegistry();
+		consumer = new MarketDataConsumer(
+			objectMapper,
+			tickerService,
+			tradeService,
+			orderBookService,
+			meterRegistry,
+			true
+		);
 	}
 
 	@Test

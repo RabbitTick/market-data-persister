@@ -37,3 +37,15 @@ app:
     max-concurrent-consumers: 4
     prefetch-count: 50
     listener-concurrency: 2-4
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    prometheus:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
