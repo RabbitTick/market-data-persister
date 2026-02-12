@@ -1,5 +1,6 @@
 package com.rabbittick.persister.messaging;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -61,8 +62,7 @@ class MarketDataConsumerTest {
 			tickerService,
 			tradeService,
 			orderBookService,
-			meterRegistry,
-			true
+			meterRegistry
 		);
 	}
 
@@ -173,15 +173,13 @@ class MarketDataConsumerTest {
 	}
 
 	@Test
-	void handleMessage_nackOnInvalidJson() throws Exception {
+	void handleMessage_throwsOnInvalidJson_forRetryAndDlq() {
 		// given
 		Message message = buildRawMessage("{invalid-json", 4L);
 
-		// when
-		consumer.handleMarketDataMessage(message, channel);
-
-		// then
-		verify(channel).basicNack(4L, false, true);
+		// when & then
+		assertThatThrownBy(() -> consumer.handleMarketDataMessage(message, channel))
+			.isInstanceOf(RuntimeException.class);
 	}
 
 	@Test
