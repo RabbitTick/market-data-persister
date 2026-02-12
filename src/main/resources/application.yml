@@ -32,7 +32,10 @@ app:
     routing-key-ticker: "*.ticker.#"
     routing-key-trade: "*.trade.#"
     routing-key-orderbook: "*.orderbook.#"
-    nack-requeue: true
+    dlq-exchange: market-data.dlx
+    dlq-queue: market-data.persist.dlq
+    dlq-routing-key: market-data.persist.dlq
+    retry-max-attempts: 3
     concurrent-consumers: 2
     max-concurrent-consumers: 4
     prefetch-count: 50
