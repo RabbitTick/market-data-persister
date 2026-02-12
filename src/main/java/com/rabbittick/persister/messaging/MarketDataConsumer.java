@@ -10,7 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
@@ -56,7 +55,6 @@ public class MarketDataConsumer {
 	private final TickerService tickerService;
 	private final TradeService tradeService;
 	private final OrderBookService orderBookService;
-	private final boolean nackRequeue;
 	private final MeterRegistry meterRegistry;
 
 	/**
@@ -66,22 +64,20 @@ public class MarketDataConsumer {
 	 * @param tickerService 티커 저장 서비스
 	 * @param tradeService 거래 체결 저장 서비스
 	 * @param orderBookService 호가 저장 서비스
-	 * @param nackRequeue Nack 시 재큐잉 여부
+	 * @param meterRegistry 메트릭 레지스트리
 	 */
 	public MarketDataConsumer(
 		ObjectMapper objectMapper,
 		TickerService tickerService,
 		TradeService tradeService,
 		OrderBookService orderBookService,
-		MeterRegistry meterRegistry,
-		@Value("${app.rabbitmq.nack-requeue:true}") boolean nackRequeue
+		MeterRegistry meterRegistry
 	) {
 		this.objectMapper = objectMapper;
 		this.tickerService = tickerService;
 		this.tradeService = tradeService;
 		this.orderBookService = orderBookService;
 		this.meterRegistry = meterRegistry;
-		this.nackRequeue = nackRequeue;
 	}
 
 	/**
@@ -156,8 +152,7 @@ public class MarketDataConsumer {
 		} catch (Exception ex) {
 			outcome = "error";
 			log.error("메시지 처리에 실패했습니다. messageBody={}", body, ex);
-			channel.basicNack(deliveryTag, false, nackRequeue);
-			nacked = true;
+			throw new RuntimeException(ex);
 		} finally {
 			String messageTypeTag = normalizeDataType(messageType);
 			recordProcessingMetrics(messageTypeTag, outcome, totalSample, acked, nacked);
