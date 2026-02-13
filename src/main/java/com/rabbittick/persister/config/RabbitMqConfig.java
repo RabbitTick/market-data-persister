@@ -3,6 +3,7 @@ package com.rabbittick.persister.config;
 import java.io.IOException;
 import java.util.Map;
 
+import com.rabbittick.persister.messaging.AcknowledgingRepublishMessageRecoverer;
 import org.aopalliance.aop.Advice;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
@@ -15,7 +16,6 @@ import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFacto
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.config.RetryInterceptorBuilder;
-import org.springframework.amqp.rabbit.retry.RepublishMessageRecoverer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -131,21 +131,21 @@ public class RabbitMqConfig {
 	 * @param messageRetryPolicy 재시도 정책 빈
 	 * @return 재시도 어드바이스
 	 */
-	@Bean
-	public Advice retryAdvice(
-		RabbitTemplate rabbitTemplate,
-		SimpleRetryPolicy messageRetryPolicy
-	) {
-		RepublishMessageRecoverer recoverer = new RepublishMessageRecoverer(
-			rabbitTemplate,
-			dlqExchangeName,
-			dlqRoutingKey
-		);
-		return RetryInterceptorBuilder.stateless()
-			.retryPolicy(messageRetryPolicy)
-			.recoverer(recoverer)
-			.build();
-	}
+    @Bean
+    public Advice retryAdvice(
+        RabbitTemplate rabbitTemplate,
+        SimpleRetryPolicy messageRetryPolicy
+    ) {
+        AcknowledgingRepublishMessageRecoverer recoverer = new AcknowledgingRepublishMessageRecoverer(
+            rabbitTemplate,
+            dlqExchangeName,
+            dlqRoutingKey
+        );
+        return RetryInterceptorBuilder.stateless()
+            .retryPolicy(messageRetryPolicy)
+            .recoverer(recoverer)
+            .build();
+    }
 
 	/**
 	 * 수동 Ack 모드 컨테이너 팩토리를 생성한다.
