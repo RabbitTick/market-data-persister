@@ -47,6 +47,8 @@ public class MarketDataConsumer {
 	private static final String METRIC_MESSAGES = "market_data.messages";
 	private static final String METRIC_PROCESS_LATENCY = "market_data.process.latency";
 	private static final String METRIC_PERSIST_LATENCY = "market_data.persist.latency";
+	private static final String METRIC_PARSE_LATENCY = "market_data.segment.parse.latency";
+	private static final String METRIC_COMMIT_LATENCY = "market_data.segment.commit.latency";
 	private static final String METRIC_INGEST_LAG = "market_data.ingest.lag";
 	private static final String METRIC_ACK = "market_data.ack";
 	private static final String METRIC_NACK = "market_data.nack";
@@ -96,11 +98,14 @@ public class MarketDataConsumer {
 		long deliveryTag = message.getMessageProperties().getDeliveryTag();
 		String body = new String(message.getBody(), StandardCharsets.UTF_8);
 		Timer.Sample totalSample = Timer.start(meterRegistry);
+		Timer.Sample parseSample = Timer.start(meterRegistry);
+		boolean parseStopped = false;
 		String messageType = "unknown";
 		String outcome = "success";
 		boolean acked = false;
 		boolean nacked = false;
 		Long ingestLagMs = null;
+		Timer.Sample commitSample = null;
 
 		try {
 			String normalizedJson = normalizeBody(body);
@@ -110,6 +115,8 @@ public class MarketDataConsumer {
 			ingestLagMs = extractIngestLagMs(rootNode);
 			if (messageType == null) {
 				outcome = "missing_type";
+				parseSample.stop(parseTimer(messageTypeTag, outcome));
+				parseStopped = true;
 				log.warn("metadata.dataType이 누락되었습니다. messageBody={}", body);
 				channel.basicAck(deliveryTag, false);
 				acked = true;
@@ -121,21 +128,32 @@ public class MarketDataConsumer {
 					normalizedJson,
 					new TypeReference<MarketDataMessage<TickerPayload>>() {}
 				);
+				parseSample.stop(parseTimer(messageTypeTag, outcome));
+				parseStopped = true;
 				recordPersistLatency(messageTypeTag, () -> tickerService.saveTicker(marketDataMessage));
+				commitSample = Timer.start(meterRegistry);
 			} else if (isTradeType(messageType)) {
 				MarketDataMessage<TradePayload> marketDataMessage = objectMapper.readValue(
 					normalizedJson,
 					new TypeReference<MarketDataMessage<TradePayload>>() {}
 				);
+				parseSample.stop(parseTimer(messageTypeTag, outcome));
+				parseStopped = true;
 				recordPersistLatency(messageTypeTag, () -> tradeService.saveTrade(marketDataMessage));
+				commitSample = Timer.start(meterRegistry);
 			} else if (isOrderBookType(messageType)) {
 				MarketDataMessage<OrderBookPayload> marketDataMessage = objectMapper.readValue(
 					normalizedJson,
 					new TypeReference<MarketDataMessage<OrderBookPayload>>() {}
 				);
+				parseSample.stop(parseTimer(messageTypeTag, outcome));
+				parseStopped = true;
 				recordPersistLatency(messageTypeTag, () -> orderBookService.saveOrderBook(marketDataMessage));
+				commitSample = Timer.start(meterRegistry);
 			} else {
 				outcome = "unsupported_type";
+				parseSample.stop(parseTimer(messageTypeTag, outcome));
+				parseStopped = true;
 				log.warn("지원하지 않는 dataType 입니다. dataType={}, messageBody={}", messageType, body);
 				channel.basicAck(deliveryTag, false);
 				acked = true;
@@ -143,6 +161,9 @@ public class MarketDataConsumer {
 			}
 
 			channel.basicAck(deliveryTag, false);
+			if (commitSample != null) {
+				commitSample.stop(commitTimer(messageTypeTag, outcome));
+			}
 			acked = true;
 		} catch (DataIntegrityViolationException ex) {
 			outcome = "duplicate";
@@ -155,6 +176,9 @@ public class MarketDataConsumer {
 			throw new RuntimeException(ex);
 		} finally {
 			String messageTypeTag = normalizeDataType(messageType);
+			if (!parseStopped) {
+				parseSample.stop(parseTimer(messageTypeTag, outcome));
+			}
 			recordProcessingMetrics(messageTypeTag, outcome, totalSample, acked, nacked);
 			recordIngestLag(messageTypeTag, ingestLagMs);
 		}
@@ -299,6 +323,20 @@ public class MarketDataConsumer {
 	private Timer persistTimer(String messageTypeTag, String outcome) {
 		return Timer.builder(METRIC_PERSIST_LATENCY)
 			.description("DB persistence latency in consumer")
+			.tags("dataType", messageTypeTag, "outcome", outcome)
+			.register(meterRegistry);
+	}
+
+	private Timer parseTimer(String messageTypeTag, String outcome) {
+		return Timer.builder(METRIC_PARSE_LATENCY)
+			.description("Parse segment: receive to parse complete (deserialize, type extraction)")
+			.tags("dataType", messageTypeTag, "outcome", outcome)
+			.register(meterRegistry);
+	}
+
+	private Timer commitTimer(String messageTypeTag, String outcome) {
+		return Timer.builder(METRIC_COMMIT_LATENCY)
+			.description("Commit segment: persist complete to broker ack")
 			.tags("dataType", messageTypeTag, "outcome", outcome)
 			.register(meterRegistry);
 	}
