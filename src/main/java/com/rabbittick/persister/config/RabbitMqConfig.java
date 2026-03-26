@@ -166,6 +166,7 @@ public class RabbitMqConfig {
 		factory.setConcurrentConsumers(concurrentConsumers);
 		factory.setMaxConcurrentConsumers(maxConcurrentConsumers);
 		factory.setPrefetchCount(prefetchCount);
+		factory.setEnforceImmediateAckForManual(true);
 		factory.setAdviceChain(retryAdvice);
 		return factory;
 	}
