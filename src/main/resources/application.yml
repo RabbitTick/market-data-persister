@@ -16,6 +16,8 @@ spring:
     url: jdbc:mysql://localhost:3306/rabbittick?useUnicode=true&characterEncoding=UTF-8&rewriteBatchedStatements=true
     username: root
     password: password
+    hikari:
+      maximum-pool-size: 12
 
   jpa:
     hibernate:
@@ -39,10 +41,10 @@ app:
     dlq-queue: market-data.persist.dlq
     dlq-routing-key: market-data.persist.dlq
     retry-max-attempts: 3
-    concurrent-consumers: 2
-    max-concurrent-consumers: 4
+    concurrent-consumers: 6
+    max-concurrent-consumers: 10
     prefetch-count: 50
-    listener-concurrency: 2-4
+    listener-concurrency: 6-10
 
 management:
   endpoints:
