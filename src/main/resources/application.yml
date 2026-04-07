@@ -17,15 +17,13 @@ spring:
     username: root
     password: password
     hikari:
-      maximum-pool-size: 12
+      maximum-pool-size: 20
 
   jpa:
     hibernate:
       ddl-auto: update
     properties:
       hibernate:
-        show_sql: true
-        format_sql: true
         jdbc:
           batch_size: 50
           order_inserts: true
