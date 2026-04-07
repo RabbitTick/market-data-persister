@@ -35,8 +35,11 @@ import io.micrometer.core.instrument.Timer;
  *
  * 주요 책임:
  *
+ * 데이터타입별 큐 분리에 따른 전용 컨슈머 메서드 제공
+ *   ticker.queue    → handleTickerMessage    (tickerContainerFactory)
+ *   trade.queue     → handleTradeMessage     (tradeContainerFactory)
+ *   orderbook.queue → handleOrderBookMessage (orderBookContainerFactory)
  * 수신 메시지 역직렬화
- * 데이터 타입 분기 처리 (ticker/trade/orderbook)
  * DB 저장 처리 및 Ack/Nack 정책 적용
  * 예외 및 멱등성 처리 로그 기록
  */
@@ -83,24 +86,86 @@ public class MarketDataConsumer {
 	}
 
 	/**
-	 * RabbitMQ 메시지를 수신하여 처리한다.
+	 * ticker.queue 전용 컨슈머.
 	 *
 	 * @param message 수신 메시지
 	 * @param channel RabbitMQ 채널
 	 * @throws IOException 채널 Ack/Nack 실패 시
 	 */
 	@RabbitListener(
-		queues = "${app.rabbitmq.queue}",
-		containerFactory = "rabbitListenerContainerFactory",
-		concurrency = "${app.rabbitmq.listener-concurrency:2-4}"
+		queues = "ticker.queue",
+		containerFactory = "tickerContainerFactory"
 	)
-	public void handleMarketDataMessage(Message message, Channel channel) throws IOException {
+	public void handleTickerMessage(Message message, Channel channel) throws IOException {
+		processMessage(message, channel, "ticker", body -> {
+			MarketDataMessage<TickerPayload> msg = objectMapper.readValue(
+				body,
+				new TypeReference<MarketDataMessage<TickerPayload>>() {}
+			);
+			tickerService.saveTicker(msg);
+		});
+	}
+
+	/**
+	 * trade.queue 전용 컨슈머.
+	 *
+	 * @param message 수신 메시지
+	 * @param channel RabbitMQ 채널
+	 * @throws IOException 채널 Ack/Nack 실패 시
+	 */
+	@RabbitListener(
+		queues = "trade.queue",
+		containerFactory = "tradeContainerFactory"
+	)
+	public void handleTradeMessage(Message message, Channel channel) throws IOException {
+		processMessage(message, channel, "trade", body -> {
+			MarketDataMessage<TradePayload> msg = objectMapper.readValue(
+				body,
+				new TypeReference<MarketDataMessage<TradePayload>>() {}
+			);
+			tradeService.saveTrade(msg);
+		});
+	}
+
+	/**
+	 * orderbook.queue 전용 컨슈머.
+	 *
+	 * @param message 수신 메시지
+	 * @param channel RabbitMQ 채널
+	 * @throws IOException 채널 Ack/Nack 실패 시
+	 */
+	@RabbitListener(
+		queues = "orderbook.queue",
+		containerFactory = "orderBookContainerFactory"
+	)
+	public void handleOrderBookMessage(Message message, Channel channel) throws IOException {
+		processMessage(message, channel, "orderbook", body -> {
+			MarketDataMessage<OrderBookPayload> msg = objectMapper.readValue(
+				body, new TypeReference<MarketDataMessage<OrderBookPayload>>() {});
+			orderBookService.saveOrderBook(msg);
+		});
+	}
+
+	/**
+	 * 세 컨슈머가 공유하는 공통 처리 흐름.
+	 * 파싱 → 저장 → Ack / 예외 시 throw → RetryInterceptor → DLQ
+	 *
+	 * @param message 수신 메시지
+	 * @param channel RabbitMQ 채널
+	 * @param messageType 데이터 타입 문자열 (메트릭 태그용)
+	 * @param persistence 실제 저장 로직 (람다)
+	 * @throws IOException 채널 Ack/Nack 실패 시
+	 */
+	private void processMessage(
+		Message message,
+		Channel channel,
+		String messageType,
+		MessageProcessor persistence
+	) throws IOException {
 		long deliveryTag = message.getMessageProperties().getDeliveryTag();
 		String body = new String(message.getBody(), StandardCharsets.UTF_8);
 		Timer.Sample totalSample = Timer.start(meterRegistry);
 		Timer.Sample parseSample = Timer.start(meterRegistry);
-		boolean parseStopped = false;
-		String messageType = "unknown";
 		String outcome = "success";
 		boolean acked = false;
 		boolean nacked = false;
@@ -110,127 +175,44 @@ public class MarketDataConsumer {
 		try {
 			String normalizedJson = normalizeBody(body);
 			JsonNode rootNode = objectMapper.readTree(normalizedJson);
-			messageType = extractDataType(rootNode);
-			String messageTypeTag = normalizeDataType(messageType);
 			ingestLagMs = extractIngestLagMs(rootNode);
-			if (messageType == null) {
-				outcome = "missing_type";
-				parseSample.stop(parseTimer(messageTypeTag, outcome));
-				parseStopped = true;
-				log.warn("metadata.dataType이 누락되었습니다. messageBody={}", body);
-				channel.basicAck(deliveryTag, false);
-				acked = true;
-				return;
-			}
-
-			if (isTickerType(messageType)) {
-				MarketDataMessage<TickerPayload> marketDataMessage = objectMapper.readValue(
-					normalizedJson,
-					new TypeReference<MarketDataMessage<TickerPayload>>() {}
-				);
-				parseSample.stop(parseTimer(messageTypeTag, outcome));
-				parseStopped = true;
-				recordPersistLatency(messageTypeTag, () -> tickerService.saveTicker(marketDataMessage));
-				commitSample = Timer.start(meterRegistry);
-			} else if (isTradeType(messageType)) {
-				MarketDataMessage<TradePayload> marketDataMessage = objectMapper.readValue(
-					normalizedJson,
-					new TypeReference<MarketDataMessage<TradePayload>>() {}
-				);
-				parseSample.stop(parseTimer(messageTypeTag, outcome));
-				parseStopped = true;
-				recordPersistLatency(messageTypeTag, () -> tradeService.saveTrade(marketDataMessage));
-				commitSample = Timer.start(meterRegistry);
-			} else if (isOrderBookType(messageType)) {
-				MarketDataMessage<OrderBookPayload> marketDataMessage = objectMapper.readValue(
-					normalizedJson,
-					new TypeReference<MarketDataMessage<OrderBookPayload>>() {}
-				);
-				parseSample.stop(parseTimer(messageTypeTag, outcome));
-				parseStopped = true;
-				recordPersistLatency(messageTypeTag, () -> orderBookService.saveOrderBook(marketDataMessage));
-				commitSample = Timer.start(meterRegistry);
-			} else {
-				outcome = "unsupported_type";
-				parseSample.stop(parseTimer(messageTypeTag, outcome));
-				parseStopped = true;
-				log.warn("지원하지 않는 dataType 입니다. dataType={}, messageBody={}", messageType, body);
-				channel.basicAck(deliveryTag, false);
-				acked = true;
-				return;
-			}
+			parseSample.stop(parseTimer(messageType, outcome));
+			recordPersistLatency(messageType, () -> {
+				try {
+					persistence.process(normalizedJson);
+				} catch (IOException e) {
+					throw new RuntimeException(e);
+				}
+			});
+			commitSample = Timer.start(meterRegistry);
 
 			channel.basicAck(deliveryTag, false);
 			if (commitSample != null) {
-				commitSample.stop(commitTimer(messageTypeTag, outcome));
+				commitSample.stop(commitTimer(messageType, outcome));
 			}
 			acked = true;
 		} catch (DataIntegrityViolationException ex) {
 			outcome = "duplicate";
-			log.warn("중복 데이터로 판단되어 저장을 생략합니다. messageBody={}", body, ex);
+			log.warn("중복 데이터로 판단되어 저장을 생략합니다. dataType={}, messageBody={}", messageType, body, ex);
 			channel.basicAck(deliveryTag, false);
 			acked = true;
 		} catch (Exception ex) {
 			outcome = "error";
-			log.error("메시지 처리에 실패했습니다. messageBody={}", body, ex);
+			log.error("메시지 처리에 실패했습니다. dataType={}, messageBody={}", messageType, body, ex);
 			throw new RuntimeException(ex);
 		} finally {
-			String messageTypeTag = normalizeDataType(messageType);
-			if (!parseStopped) {
-				parseSample.stop(parseTimer(messageTypeTag, outcome));
-			}
-			recordProcessingMetrics(messageTypeTag, outcome, totalSample, acked, nacked);
-			recordIngestLag(messageTypeTag, ingestLagMs);
+			recordProcessingMetrics(messageType, outcome, totalSample, acked, nacked);
+			recordIngestLag(messageType, ingestLagMs);
 		}
-	}
-
-	private boolean isTickerType(String dataType) {
-		return dataType != null && dataType.equalsIgnoreCase("TICKER");
 	}
 
 	/**
-	 * trade 타입 여부를 확인한다.
-	 *
-	 * @param dataType 데이터 타입
-	 * @return trade 타입 여부
+	 * 저장 로직을 함수형 인터페이스로 추상화한다.
+	 * 각 컨슈머의 람다가 이를 구현한다.
 	 */
-	private boolean isTradeType(String dataType) {
-		return dataType != null && dataType.equalsIgnoreCase("TRADE");
-	}
-
-	/**
-	 * orderbook 타입 여부를 확인한다.
-	 *
-	 * @param dataType 데이터 타입
-	 * @return orderbook 타입 여부
-	 */
-	private boolean isOrderBookType(String dataType) {
-		return dataType != null && dataType.equalsIgnoreCase("ORDERBOOK");
-	}
-
-	/**
-	 * metadata에서 dataType을 추출한다.
-	 *
-	 * @param rootNode 메시지 루트 노드
-	 * @return dataType 문자열 (없으면 null)
-	 */
-	private String extractDataType(JsonNode rootNode) {
-		JsonNode metadataNode = rootNode.get("metadata");
-		if (metadataNode == null) {
-			return null;
-		}
-		JsonNode dataTypeNode = metadataNode.get("dataType");
-		if (dataTypeNode == null || dataTypeNode.isNull()) {
-			return null;
-		}
-		return dataTypeNode.asText();
-	}
-
-	private String normalizeDataType(String dataType) {
-		if (dataType == null || dataType.isBlank()) {
-			return "unknown";
-		}
-		return dataType.trim().toLowerCase();
+	@FunctionalInterface
+	private interface MessageProcessor {
+		void process(String normalizedJson) throws IOException;
 	}
 
 	private Long extractIngestLagMs(JsonNode rootNode) {
@@ -258,86 +240,86 @@ public class MarketDataConsumer {
 		}
 	}
 
-	private void recordPersistLatency(String messageTypeTag, Runnable persistence) {
+	private void recordPersistLatency(String messageType, Runnable persistence) {
 		Timer.Sample persistSample = Timer.start(meterRegistry);
 		try {
 			persistence.run();
-			persistSample.stop(persistTimer(messageTypeTag, "success"));
+			persistSample.stop(persistTimer(messageType, "success"));
 		} catch (DataIntegrityViolationException ex) {
-			persistSample.stop(persistTimer(messageTypeTag, "duplicate"));
+			persistSample.stop(persistTimer(messageType, "duplicate"));
 			throw ex;
 		} catch (RuntimeException ex) {
-			persistSample.stop(persistTimer(messageTypeTag, "error"));
+			persistSample.stop(persistTimer(messageType, "error"));
 			throw ex;
 		}
 	}
 
 	private void recordProcessingMetrics(
-		String messageTypeTag,
+		String messageType,
 		String outcome,
 		Timer.Sample totalSample,
 		boolean acked,
 		boolean nacked
 	) {
-		totalSample.stop(processTimer(messageTypeTag, outcome));
+		totalSample.stop(processTimer(messageType, outcome));
 		Counter.builder(METRIC_MESSAGES)
 			.description("Messages processed by consumer")
-			.tags("dataType", messageTypeTag, "outcome", outcome)
+			.tags("dataType", messageType, "outcome", outcome)
 			.register(meterRegistry)
 			.increment();
 		if (acked) {
 			Counter.builder(METRIC_ACK)
 				.description("Messages acked by consumer")
-				.tags("dataType", messageTypeTag, "outcome", outcome)
+				.tags("dataType", messageType, "outcome", outcome)
 				.register(meterRegistry)
 				.increment();
 		}
 		if (nacked) {
 			Counter.builder(METRIC_NACK)
 				.description("Messages nacked by consumer")
-				.tags("dataType", messageTypeTag, "outcome", outcome)
+				.tags("dataType", messageType, "outcome", outcome)
 				.register(meterRegistry)
 				.increment();
 		}
 	}
 
-	private void recordIngestLag(String messageTypeTag, Long ingestLagMs) {
+	private void recordIngestLag(String messageType, Long ingestLagMs) {
 		if (ingestLagMs == null) {
 			return;
 		}
 		DistributionSummary.builder(METRIC_INGEST_LAG)
 			.baseUnit("milliseconds")
 			.description("Lag between collection time and consumer time")
-			.tags("dataType", messageTypeTag)
+			.tags("dataType", messageType)
 			.register(meterRegistry)
 			.record(ingestLagMs);
 	}
 
-	private Timer processTimer(String messageTypeTag, String outcome) {
+	private Timer processTimer(String messageType, String outcome) {
 		return Timer.builder(METRIC_PROCESS_LATENCY)
 			.description("End-to-end processing latency in consumer")
-			.tags("dataType", messageTypeTag, "outcome", outcome)
+			.tags("dataType", messageType, "outcome", outcome)
 			.register(meterRegistry);
 	}
 
-	private Timer persistTimer(String messageTypeTag, String outcome) {
+	private Timer persistTimer(String messageType, String outcome) {
 		return Timer.builder(METRIC_PERSIST_LATENCY)
 			.description("DB persistence latency in consumer")
-			.tags("dataType", messageTypeTag, "outcome", outcome)
+			.tags("dataType", messageType, "outcome", outcome)
 			.register(meterRegistry);
 	}
 
-	private Timer parseTimer(String messageTypeTag, String outcome) {
+	private Timer parseTimer(String messageType, String outcome) {
 		return Timer.builder(METRIC_PARSE_LATENCY)
-			.description("Parse segment: receive to parse complete (deserialize, type extraction)")
-			.tags("dataType", messageTypeTag, "outcome", outcome)
+			.description("Parse segment: receive to parse complete")
+			.tags("dataType", messageType, "outcome", outcome)
 			.register(meterRegistry);
 	}
 
-	private Timer commitTimer(String messageTypeTag, String outcome) {
+	private Timer commitTimer(String messageType, String outcome) {
 		return Timer.builder(METRIC_COMMIT_LATENCY)
 			.description("Commit segment: persist complete to broker ack")
-			.tags("dataType", messageTypeTag, "outcome", outcome)
+			.tags("dataType", messageType, "outcome", outcome)
 			.register(meterRegistry);
 	}
 

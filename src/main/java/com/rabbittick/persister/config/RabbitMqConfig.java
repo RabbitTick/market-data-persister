@@ -32,7 +32,8 @@ import com.fasterxml.jackson.databind.JsonMappingException;
  *
  * 주요 책임:
  *
- * Exchange/Queue/Binding 선언
+ * Exchange/Queue/Binding 선언 및 데이터타입별 큐 분리
+ * 데이터타입별 컨슈머 수 독립 설정
  * 수동 Ack 모드 컨테이너 팩토리 설정
  */
 @Configuration
@@ -40,9 +41,6 @@ public class RabbitMqConfig {
 
 	@Value("${app.rabbitmq.exchange}")
 	private String exchangeName;
-
-	@Value("${app.rabbitmq.queue}")
-	private String queueName;
 
 	@Value("${app.rabbitmq.routing-key-ticker:*.ticker.#}")
 	private String tickerRoutingKey;
@@ -53,11 +51,23 @@ public class RabbitMqConfig {
 	@Value("${app.rabbitmq.routing-key-orderbook:*.orderbook.#}")
 	private String orderBookRoutingKey;
 
-	@Value("${app.rabbitmq.concurrent-consumers:2}")
-	private int concurrentConsumers;
+	@Value("${app.rabbitmq.ticker-concurrent-consumers:2}")
+	private int tickerConcurrentConsumers;
 
-	@Value("${app.rabbitmq.max-concurrent-consumers:4}")
-	private int maxConcurrentConsumers;
+	@Value("${app.rabbitmq.ticker-max-concurrent-consumers:4}")
+	private int tickerMaxConcurrentConsumers;
+
+	@Value("${app.rabbitmq.trade-concurrent-consumers:2}")
+	private int tradeConcurrentConsumers;
+
+	@Value("${app.rabbitmq.trade-max-concurrent-consumers:4}")
+	private int tradeMaxConcurrentConsumers;
+
+	@Value("${app.rabbitmq.orderbook-concurrent-consumers:4}")
+	private int orderBookConcurrentConsumers;
+
+	@Value("${app.rabbitmq.orderbook-max-concurrent-consumers:8}")
+	private int orderBookMaxConcurrentConsumers;
 
 	@Value("${app.rabbitmq.prefetch-count:50}")
 	private int prefetchCount;
@@ -76,23 +86,40 @@ public class RabbitMqConfig {
 
 	/**
 	 * Exchange/Queue/Binding 토폴로지를 생성한다.
+	 *
+	 * 데이터타입별 큐 분리:
+	 * - ticker.queue    ← *.ticker.#
+	 * - trade.queue     ← *.trade.#
+	 * - orderbook.queue ← *.orderbook.#
+	 *
+	 * orderbook이 폭증해도 ticker/trade 처리에 영향 없음.
+	 * 거래소가 추가되더라도 Binding Key의 * 와일드카드가 커버하므로 코드 수정 불필요.
 	 * DLQ(Dead Letter Queue) 및 DLX(Dead Letter Exchange) 포함.
 	 *
 	 * @return RabbitMQ 선언 객체 묶음
 	 */
 	@Bean
 	public Declarables marketDataTopology() {
-		Queue queue = new Queue(queueName, true);
 		TopicExchange exchange = new TopicExchange(exchangeName, true, false);
-		Binding tickerBinding = BindingBuilder.bind(queue).to(exchange).with(tickerRoutingKey);
-		Binding tradeBinding = BindingBuilder.bind(queue).to(exchange).with(tradeRoutingKey);
-		Binding orderBookBinding = BindingBuilder.bind(queue).to(exchange).with(orderBookRoutingKey);
+
+		Queue tickerQueue    = new Queue("ticker.queue", true);
+		Queue tradeQueue     = new Queue("trade.queue", true);
+		Queue orderBookQueue = new Queue("orderbook.queue", true);
+
+		Binding tickerBinding    = BindingBuilder.bind(tickerQueue).to(exchange).with(tickerRoutingKey);
+		Binding tradeBinding     = BindingBuilder.bind(tradeQueue).to(exchange).with(tradeRoutingKey);
+		Binding orderBookBinding = BindingBuilder.bind(orderBookQueue).to(exchange).with(orderBookRoutingKey);
 
 		DirectExchange dlx = new DirectExchange(dlqExchangeName, true, false);
 		Queue dlq = new Queue(dlqQueueName, true);
 		Binding dlqBinding = BindingBuilder.bind(dlq).to(dlx).with(dlqRoutingKey);
 
-		return new Declarables(exchange, queue, tickerBinding, tradeBinding, orderBookBinding, dlx, dlq, dlqBinding);
+		return new Declarables(
+			exchange,
+			tickerQueue, tradeQueue, orderBookQueue,
+			tickerBinding, tradeBinding, orderBookBinding,
+			dlx, dlq, dlqBinding
+		);
 	}
 
 	/**
@@ -126,45 +153,97 @@ public class RabbitMqConfig {
 	/**
 	 * 재시도 후 DLQ로 전달하는 인터셉터.
 	 * 재시도 가능 예외만 N회 재시도하고, 그 외는 즉시 recoverer(DLQ)로 보낸다.
+	 * 세 팩토리가 동일한 재시도 정책과 Recoverer를 공유한다.
 	 *
 	 * @param rabbitTemplate Rabbit 템플릿
 	 * @param messageRetryPolicy 재시도 정책 빈
 	 * @return 재시도 어드바이스
 	 */
-    @Bean
-    public Advice retryAdvice(
-        RabbitTemplate rabbitTemplate,
-        SimpleRetryPolicy messageRetryPolicy
-    ) {
-        AcknowledgingRepublishMessageRecoverer recoverer = new AcknowledgingRepublishMessageRecoverer(
-            rabbitTemplate,
-            dlqExchangeName,
-            dlqRoutingKey
-        );
-        return RetryInterceptorBuilder.stateless()
-            .retryPolicy(messageRetryPolicy)
-            .recoverer(recoverer)
-            .build();
-    }
+	@Bean
+	public Advice retryAdvice(
+		RabbitTemplate rabbitTemplate,
+		SimpleRetryPolicy messageRetryPolicy
+	) {
+		AcknowledgingRepublishMessageRecoverer recoverer = new AcknowledgingRepublishMessageRecoverer(
+			rabbitTemplate,
+			dlqExchangeName,
+			dlqRoutingKey
+		);
+		return RetryInterceptorBuilder.stateless()
+			.retryPolicy(messageRetryPolicy)
+			.recoverer(recoverer)
+			.build();
+	}
 
 	/**
-	 * 수동 Ack 모드 컨테이너 팩토리를 생성한다.
-	 * 재시도 어드바이스를 적용하여 1~2회 재시도 후 DLQ로 전달한다.
+	 * ticker 전용 컨테이너 팩토리를 생성한다.
+	 *
+	 * @RabbitListener(queues = "ticker.queue", containerFactory = "tickerContainerFactory")
 	 *
 	 * @param connectionFactory RabbitMQ 커넥션 팩토리
 	 * @param retryAdvice 재시도 어드바이스
 	 * @return 리스너 컨테이너 팩토리
 	 */
 	@Bean
-	public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+	public SimpleRabbitListenerContainerFactory tickerContainerFactory(
 		ConnectionFactory connectionFactory,
 		Advice retryAdvice
 	) {
 		SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
 		factory.setConnectionFactory(connectionFactory);
 		factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
-		factory.setConcurrentConsumers(concurrentConsumers);
-		factory.setMaxConcurrentConsumers(maxConcurrentConsumers);
+		factory.setConcurrentConsumers(tickerConcurrentConsumers);
+		factory.setMaxConcurrentConsumers(tickerMaxConcurrentConsumers);
+		factory.setPrefetchCount(prefetchCount);
+		factory.setEnforceImmediateAckForManual(true);
+		factory.setAdviceChain(retryAdvice);
+		return factory;
+	}
+
+	/**
+	 * trade 전용 컨테이너 팩토리를 생성한다.
+	 *
+	 * @RabbitListener(queues = "trade.queue", containerFactory = "tradeContainerFactory")
+	 *
+	 * @param connectionFactory RabbitMQ 커넥션 팩토리
+	 * @param retryAdvice 재시도 어드바이스
+	 * @return 리스너 컨테이너 팩토리
+	 */
+	@Bean
+	public SimpleRabbitListenerContainerFactory tradeContainerFactory(
+		ConnectionFactory connectionFactory,
+		Advice retryAdvice
+	) {
+		SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+		factory.setConnectionFactory(connectionFactory);
+		factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+		factory.setConcurrentConsumers(tradeConcurrentConsumers);
+		factory.setMaxConcurrentConsumers(tradeMaxConcurrentConsumers);
+		factory.setPrefetchCount(prefetchCount);
+		factory.setEnforceImmediateAckForManual(true);
+		factory.setAdviceChain(retryAdvice);
+		return factory;
+	}
+
+	/**
+	 * orderbook 전용 컨테이너 팩토리를 생성한다.
+	 *
+	 * @RabbitListener(queues = "orderbook.queue", containerFactory = "orderBookContainerFactory")
+	 *
+	 * @param connectionFactory RabbitMQ 커넥션 팩토리
+	 * @param retryAdvice 재시도 어드바이스
+	 * @return 리스너 컨테이너 팩토리
+	 */
+	@Bean
+	public SimpleRabbitListenerContainerFactory orderBookContainerFactory(
+		ConnectionFactory connectionFactory,
+		Advice retryAdvice
+	) {
+		SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+		factory.setConnectionFactory(connectionFactory);
+		factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+		factory.setConcurrentConsumers(orderBookConcurrentConsumers);
+		factory.setMaxConcurrentConsumers(orderBookMaxConcurrentConsumers);
 		factory.setPrefetchCount(prefetchCount);
 		factory.setEnforceImmediateAckForManual(true);
 		factory.setAdviceChain(retryAdvice);

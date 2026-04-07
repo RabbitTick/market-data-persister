@@ -33,7 +33,6 @@ spring:
 app:
   rabbitmq:
     exchange: market-data.exchange
-    queue: market-data.persist.queue
     routing-key-ticker: "*.ticker.#"
     routing-key-trade: "*.trade.#"
     routing-key-orderbook: "*.orderbook.#"
@@ -41,10 +40,16 @@ app:
     dlq-queue: market-data.persist.dlq
     dlq-routing-key: market-data.persist.dlq
     retry-max-attempts: 3
-    concurrent-consumers: 6
-    max-concurrent-consumers: 10
-    prefetch-count: 50
-    listener-concurrency: 6-10
+    prefetch-count: 100
+
+    ticker-concurrent-consumers: 2
+    ticker-max-concurrent-consumers: 4
+
+    trade-concurrent-consumers: 2
+    trade-max-concurrent-consumers: 4
+
+    orderbook-concurrent-consumers: 6
+    orderbook-max-concurrent-consumers: 12
 
 management:
   endpoints:
