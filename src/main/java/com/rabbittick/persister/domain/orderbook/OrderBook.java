@@ -2,19 +2,19 @@ package com.rabbittick.persister.domain.orderbook;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.hibernate.annotations.CreationTimestamp;
 
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.CascadeType;
-import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToMany;
-import jakarta.persistence.OrderColumn;
+import jakarta.persistence.SequenceGenerator;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
@@ -44,12 +44,13 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 public class OrderBook {
-	
+
 	/**
 	 * 내부 식별자 (Surrogate Key).
 	 */
 	@Id
-	@GeneratedValue(strategy = GenerationType.IDENTITY)
+	@GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "orderbook_seq")
+	@SequenceGenerator(name = "orderbook_seq", sequenceName = "orderbook_seq", allocationSize = 50)
 	private Long id;
 
 	/**
@@ -85,11 +86,9 @@ public class OrderBook {
 	/**
 	 * 호가 단위 목록.
 	 */
-	@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
-	@JoinColumn(name = "orderbook_id")
-	@OrderColumn(name = "unit_index")
+	@OneToMany(mappedBy = "orderBook", cascade = CascadeType.ALL, orphanRemoval = true)
 	@Builder.Default
-	private List<OrderBookUnit> orderbookUnits = List.of();
+	private List<OrderBookUnit> orderbookUnits = new ArrayList<>();
 
 	/**
 	 * 데이터 적재 시각.
@@ -97,4 +96,15 @@ public class OrderBook {
 	@CreationTimestamp
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private LocalDateTime createdAt;
+
+	/**
+	 * 호가 단위를 추가하고 양방향 연관관계를 설정한다.
+	 * 부모-자식 연관관계가 일관되도록 함께 갱신한다.
+	 *
+	 * @param unit 추가할 호가 단위 엔티티
+	 */
+	public void addUnit(OrderBookUnit unit) {
+		orderbookUnits.add(unit);
+		unit.setOrderBook(this);
+	}
 }

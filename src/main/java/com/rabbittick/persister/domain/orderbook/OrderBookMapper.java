@@ -1,6 +1,5 @@
 package com.rabbittick.persister.domain.orderbook;
 
-import java.util.List;
 import java.util.Objects;
 
 import org.springframework.stereotype.Component;
@@ -22,7 +21,7 @@ import com.rabbittick.persister.global.dto.OrderBookUnitPayload;
  */
 @Component
 public class OrderBookMapper {
-	
+
 	/**
 	 * MarketDataMessage를 OrderBook 엔티티로 변환한다.
 	 *
@@ -39,18 +38,19 @@ public class OrderBookMapper {
 		OrderBookPayload payload = message.getPayload();
 		validatePayload(payload);
 
-		List<OrderBookUnit> units = payload.getOrderbookUnits().stream()
-			.map(this::toUnitEntity)
-			.toList();
-
-		return OrderBook.builder()
+		OrderBook orderBook = OrderBook.builder()
 			.exchange(message.getMetadata().getExchange())
 			.marketCode(payload.getMarketCode())
 			.timestamp(payload.getTimestamp())
 			.totalAskSize(payload.getTotalAskSize())
 			.totalBidSize(payload.getTotalBidSize())
-			.orderbookUnits(units)
 			.build();
+
+		payload.getOrderbookUnits().forEach(unitPayload ->
+			orderBook.addUnit(toUnitEntity(unitPayload))
+		);
+
+		return orderBook;
 	}
 
 	/**
