@@ -38,3 +38,19 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to GCE
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCE_HOST }}
+          username: ${{ secrets.GCE_USER }}
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          envs: GITHUB_SHA
+          script: |
+            sed -i "s|PERSISTER_IMAGE=.*|PERSISTER_IMAGE=ghcr.io/rabbittick/market-data-persister:${GITHUB_SHA}|" ~/market-data-infra/.env
+            ~/market-data-infra/scripts/deploy.sh
