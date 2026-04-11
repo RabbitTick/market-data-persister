@@ -5,11 +5,15 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
@@ -61,6 +65,9 @@ public class MarketDataConsumer {
 	private final TradeService tradeService;
 	private final OrderBookService orderBookService;
 	private final MeterRegistry meterRegistry;
+    private final RabbitTemplate rabbitTemplate;
+    private final String dlqExchangeName;
+    private final String dlqRoutingKey;
 
 	/**
 	 * MarketDataConsumer 생성자.
@@ -76,13 +83,19 @@ public class MarketDataConsumer {
 		TickerService tickerService,
 		TradeService tradeService,
 		OrderBookService orderBookService,
-		MeterRegistry meterRegistry
+		MeterRegistry meterRegistry,
+        RabbitTemplate rabbitTemplate,
+        @Value("${app.rabbitmq.dlq-exchange}") String dlqExchangeName,
+        @Value("${app.rabbitmq.dlq-routing-key}") String dlqRoutingKey
 	) {
 		this.objectMapper = objectMapper;
 		this.tickerService = tickerService;
 		this.tradeService = tradeService;
 		this.orderBookService = orderBookService;
 		this.meterRegistry = meterRegistry;
+        this.rabbitTemplate = rabbitTemplate;
+        this.dlqExchangeName = dlqExchangeName;
+        this.dlqRoutingKey = dlqRoutingKey;
 	}
 
 	/**
@@ -127,24 +140,113 @@ public class MarketDataConsumer {
 		});
 	}
 
-	/**
-	 * orderbook.queue 전용 컨슈머.
-	 *
-	 * @param message 수신 메시지
-	 * @param channel RabbitMQ 채널
-	 * @throws IOException 채널 Ack/Nack 실패 시
-	 */
-	@RabbitListener(
-		queues = "orderbook.queue",
-		containerFactory = "orderBookContainerFactory"
-	)
-	public void handleOrderBookMessage(Message message, Channel channel) throws IOException {
-		processMessage(message, channel, "orderbook", body -> {
-			MarketDataMessage<OrderBookPayload> msg = objectMapper.readValue(
-				body, new TypeReference<MarketDataMessage<OrderBookPayload>>() {});
-			orderBookService.saveOrderBook(msg);
-		});
-	}
+    /**
+     * orderbook.queue 배치 컨슈머.
+     *
+     * <p>컨테이너가 prefetch로 미리 가져온 메시지를 최대 batchSize건 모아서 호출한다.
+     * burst 구간에서는 batchSize에 빠르게 도달하고, 평상시에는 receiveTimeout(1초)
+     * 이후 그 시점까지 수신된 건수로 호출된다.
+     *
+     * <p>재시도 어드바이스를 사용하지 않으므로 파싱 실패·저장 실패를 메서드 내에서 처리한다:
+     * <ul>
+     *   <li>파싱 실패한 건: DLQ로 개별 발행 후 Ack (배치 전체를 막지 않음)</li>
+     *   <li>저장 실패(DataIntegrityViolation): 중복으로 간주, Ack</li>
+     *   <li>저장 실패(그 외): 전체 메시지를 DLQ로 발행 후 Ack (무한 Nack 루프 방지)</li>
+     * </ul>
+     *
+     * @param messages 컨테이너가 모은 메시지 묶음
+     * @param channel RabbitMQ 채널
+     * @throws IOException basicAck 실패 시
+     */
+    @RabbitListener(
+            queues = "orderbook.queue",
+            containerFactory = "orderBookContainerFactory"
+    )
+    public void handleOrderBookMessage(List<Message> messages, Channel channel) throws IOException {
+        if (messages.isEmpty()) {
+            return;
+        }
+
+        List<OrderBookPayload> payloads = new ArrayList<>();
+        long lastDeliveryTag = 0;
+        String exchange = "UPBIT"; // 파싱 실패 시 fallback용 기본값
+
+        for (Message message : messages) {
+            lastDeliveryTag = message.getMessageProperties().getDeliveryTag();
+            String body = new String(message.getBody(), StandardCharsets.UTF_8);
+
+            try {
+                String normalizedJson = normalizeBody(body);
+                MarketDataMessage<OrderBookPayload> msg = objectMapper.readValue(
+                        normalizedJson,
+                        new TypeReference<MarketDataMessage<OrderBookPayload>>() {}
+                );
+                if (payloads.isEmpty()) {
+                    exchange = msg.getMetadata().getExchange();
+                }
+                payloads.add(msg.getPayload());
+            } catch (Exception e) {
+                log.warn("[배치] OrderBook 파싱 실패, DLQ 발행 후 계속 처리. body={}", body, e);
+                publishToDlq(message, e);
+                recordBatchOutcome("orderbook", "parse_error");
+            }
+        }
+
+        if (!payloads.isEmpty()) {
+            Timer.Sample persistSample = Timer.start(meterRegistry);
+            try {
+                orderBookService.saveOrderBookBatch(exchange, payloads);
+                persistSample.stop(Timer.builder(METRIC_PERSIST_LATENCY)
+                        .tags("dataType", "orderbook", "outcome", "success")
+                        .register(meterRegistry));
+                recordBatchOutcome("orderbook", "success");
+            } catch (DataIntegrityViolationException e) {
+                persistSample.stop(Timer.builder(METRIC_PERSIST_LATENCY)
+                        .tags("dataType", "orderbook", "outcome", "duplicate")
+                        .register(meterRegistry));
+                log.warn("[배치] OrderBook 배치 내 중복 데이터. size={}", payloads.size(), e);
+                recordBatchOutcome("orderbook", "duplicate");
+            } catch (Exception e) {
+                persistSample.stop(Timer.builder(METRIC_PERSIST_LATENCY)
+                        .tags("dataType", "orderbook", "outcome", "error")
+                        .register(meterRegistry));
+                log.error("[배치] OrderBook 배치 저장 실패. size={}. DLQ로 발행.", payloads.size(), e);
+                for (Message message : messages) {
+                    publishToDlq(message, e);
+                }
+                recordBatchOutcome("orderbook", "batch_error");
+            }
+        }
+
+        channel.basicAck(lastDeliveryTag, true);
+    }
+
+    /**
+     * 처리 불가 메시지를 DLQ로 발행한다.
+     * 배치 리스너는 RetryInterceptor를 사용하지 않으므로 직접 발행한다.
+     *
+     * @param message 원본 메시지
+     * @param cause 실패 원인
+     */
+    private void publishToDlq(Message message, Throwable cause) {
+        try {
+            rabbitTemplate.send(dlqExchangeName, dlqRoutingKey, message);
+        } catch (Exception e) {
+            log.error("[배치] DLQ 발행 실패. deliveryTag={}",
+                    message.getMessageProperties().getDeliveryTag(), e);
+        }
+    }
+
+    /**
+     * 배치 처리 결과를 메트릭으로 기록한다.
+     */
+    private void recordBatchOutcome(String dataType, String outcome) {
+        Counter.builder(METRIC_MESSAGES)
+                .description("Messages processed by consumer")
+                .tags("dataType", dataType, "outcome", outcome)
+                .register(meterRegistry)
+                .increment();
+    }
 
 	/**
 	 * 세 컨슈머가 공유하는 공통 처리 흐름.

@@ -84,6 +84,9 @@ public class RabbitMqConfig {
 	@Value("${app.rabbitmq.retry-max-attempts:3}")
 	private int retryMaxAttempts;
 
+	@Value("${app.rabbitmq.orderbook-batch-size:50}")
+	private int orderBookBatchSize;
+
 	/**
 	 * Exchange/Queue/Binding 토폴로지를 생성한다.
 	 *
@@ -233,13 +236,11 @@ public class RabbitMqConfig {
 	 * @RabbitListener(queues = "orderbook.queue", containerFactory = "orderBookContainerFactory")
 	 *
 	 * @param connectionFactory RabbitMQ 커넥션 팩토리
-	 * @param retryAdvice 재시도 어드바이스
 	 * @return 리스너 컨테이너 팩토리
 	 */
 	@Bean
 	public SimpleRabbitListenerContainerFactory orderBookContainerFactory(
-		ConnectionFactory connectionFactory,
-		Advice retryAdvice
+		ConnectionFactory connectionFactory
 	) {
 		SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
 		factory.setConnectionFactory(connectionFactory);
@@ -248,8 +249,13 @@ public class RabbitMqConfig {
 		factory.setMaxConcurrentConsumers(orderBookMaxConcurrentConsumers);
 		factory.setPrefetchCount(prefetchCount);
 		factory.setEnforceImmediateAckForManual(true);
-		factory.setAdviceChain(retryAdvice);
+
+		// 배치 설정 추가
+		factory.setBatchListener(true);
+		factory.setConsumerBatchEnabled(true);
+		factory.setBatchSize(orderBookBatchSize);
 		factory.setContainerCustomizer(container -> container.setShutdownTimeout(5000L));
+
 		return factory;
 	}
 }
