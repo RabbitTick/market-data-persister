@@ -10,6 +10,9 @@ spring:
     port: 5672
     username: guest
     password: guest
+    listener:
+      simple:
+        default-requeue-rejected: true
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -60,3 +63,4 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+

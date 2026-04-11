@@ -197,6 +197,7 @@ public class RabbitMqConfig {
 		factory.setPrefetchCount(prefetchCount);
 		factory.setEnforceImmediateAckForManual(true);
 		factory.setAdviceChain(retryAdvice);
+		factory.setContainerCustomizer(container -> container.setShutdownTimeout(5000L));
 		return factory;
 	}
 
@@ -222,6 +223,7 @@ public class RabbitMqConfig {
 		factory.setPrefetchCount(prefetchCount);
 		factory.setEnforceImmediateAckForManual(true);
 		factory.setAdviceChain(retryAdvice);
+		factory.setContainerCustomizer(container -> container.setShutdownTimeout(5000L));
 		return factory;
 	}
 
@@ -247,6 +249,7 @@ public class RabbitMqConfig {
 		factory.setPrefetchCount(prefetchCount);
 		factory.setEnforceImmediateAckForManual(true);
 		factory.setAdviceChain(retryAdvice);
+		factory.setContainerCustomizer(container -> container.setShutdownTimeout(5000L));
 		return factory;
 	}
 }
