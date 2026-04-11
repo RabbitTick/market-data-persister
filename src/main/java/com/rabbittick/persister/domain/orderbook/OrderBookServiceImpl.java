@@ -8,6 +8,9 @@ import com.rabbittick.persister.global.dto.OrderBookPayload;
 
 import lombok.RequiredArgsConstructor;
 
+import java.util.List;
+import java.util.stream.Collectors;
+
 /**
  * 호가 저장 도메인 서비스 구현체.
  *
@@ -33,5 +36,14 @@ public class OrderBookServiceImpl implements OrderBookService {
 	public void saveOrderBook(MarketDataMessage<OrderBookPayload> message) {
 		OrderBook orderBook = orderBookMapper.toEntity(message);
 		orderBookRepository.save(orderBook);
+	}
+
+	@Override
+	@Transactional
+	public void saveOrderBookBatch(String exchange, List<OrderBookPayload> payloads) {
+		List<OrderBook> entities = payloads.stream()
+			.map(payload -> orderBookMapper.toEntity(exchange, payload))
+			.collect(Collectors.toList());
+		orderBookRepository.saveAll(entities);
 	}
 }

@@ -54,6 +54,34 @@ public class OrderBookMapper {
 	}
 
 	/**
+	 * exchange 이름과 OrderBookPayload를 받아 OrderBook 엔티티로 변환한다.
+	 * 배치 처리에서 MarketDataMessage 래퍼 없이 payload만 전달받을 때 사용한다.
+	 *
+	 * @param exchange 거래소 이름 (예: UPBIT)
+	 * @param payload 호가 payload
+	 * @return 변환된 OrderBook 엔티티
+	 */
+	public OrderBook toEntity(String exchange, OrderBookPayload payload) {
+		Objects.requireNonNull(exchange, "exchange는 null일 수 없다");
+		Objects.requireNonNull(payload, "payload는 null일 수 없다");
+		validatePayload(payload);
+
+		OrderBook orderBook = OrderBook.builder()
+			.exchange(exchange)
+			.marketCode(payload.getMarketCode())
+			.timestamp(payload.getTimestamp())
+			.totalAskSize(payload.getTotalAskSize())
+			.totalBidSize(payload.getTotalBidSize())
+			.build();
+
+		payload.getOrderbookUnits().forEach(unitPayload ->
+			orderBook.addUnit(toUnitEntity(unitPayload))
+		);
+
+		return orderBook;
+	}
+
+	/**
 	 * 호가 단위 payload를 OrderBookUnit 엔티티로 변환한다.
 	 *
 	 * @param unit 호가 단위 payload
