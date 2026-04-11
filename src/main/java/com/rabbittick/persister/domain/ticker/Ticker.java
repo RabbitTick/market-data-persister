@@ -104,7 +104,7 @@ public class Ticker {
 	/**
 	 * 24시간 누적 거래량.
 	 */
-	@Column(name = "acc_trade_volume_24h", nullable = false, precision = 20, scale = 8)
+	@Column(name = "acc_trade_volume_24h", nullable = false, precision = 30, scale = 8)
 	private BigDecimal accTradeVolume24h;
 
 	/**
