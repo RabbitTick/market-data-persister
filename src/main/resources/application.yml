@@ -65,3 +65,7 @@ management:
     tags:
       application: ${spring.application.name}
 
+logging:
+  level:
+    com.rabbittick.persister.messaging.MarketDataConsumer: debug
+

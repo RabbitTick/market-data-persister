@@ -200,6 +200,7 @@ public class MarketDataConsumer {
                         .tags("dataType", "orderbook", "outcome", "success")
                         .register(meterRegistry));
                 recordBatchOutcome("orderbook", "success");
+                log.debug("[배치] OrderBook {}건 저장 완료", payloads.size());
             } catch (DataIntegrityViolationException e) {
                 persistSample.stop(Timer.builder(METRIC_PERSIST_LATENCY)
                         .tags("dataType", "orderbook", "outcome", "duplicate")
