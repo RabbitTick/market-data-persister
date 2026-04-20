@@ -1,6 +1,8 @@
 package com.rabbittick.persister.config;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import com.rabbittick.persister.messaging.AcknowledgingRepublishMessageRecoverer;
@@ -8,6 +10,8 @@ import org.aopalliance.aop.Advice;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.CustomExchange;
+import org.springframework.amqp.core.Declarable;
 import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
@@ -63,11 +67,14 @@ public class RabbitMqConfig {
 	@Value("${app.rabbitmq.trade-max-concurrent-consumers:4}")
 	private int tradeMaxConcurrentConsumers;
 
-	@Value("${app.rabbitmq.orderbook-concurrent-consumers:4}")
-	private int orderBookConcurrentConsumers;
+	@Value("${app.rabbitmq.orderbook-shard-count:3}")
+	private int orderBookShardCount;
 
-	@Value("${app.rabbitmq.orderbook-max-concurrent-consumers:8}")
-	private int orderBookMaxConcurrentConsumers;
+	@Value("${app.rabbitmq.orderbook-shard-concurrent-consumers:4}")
+	private int orderBookShardConcurrentConsumers;
+
+	@Value("${app.rabbitmq.orderbook-shard-max-concurrent-consumers:4}")
+	private int orderBookShardMaxConcurrentConsumers;
 
 	@Value("${app.rabbitmq.prefetch-count:50}")
 	private int prefetchCount;
@@ -91,12 +98,17 @@ public class RabbitMqConfig {
 	 * Exchange/Queue/Binding 토폴로지를 생성한다.
 	 *
 	 * 데이터타입별 큐 분리:
-	 * - ticker.queue    ← *.ticker.#
-	 * - trade.queue     ← *.trade.#
-	 * - orderbook.queue ← *.orderbook.#
+	 * - ticker.queue                ← *.ticker.#
+	 * - trade.queue                 ← *.trade.#
+	 * - orderbook.queue.shard.0~N   ← orderbook.hash.exchange (x-consistent-hash)
 	 *
-	 * orderbook이 폭증해도 ticker/trade 처리에 영향 없음.
-	 * 거래소가 추가되더라도 Binding Key의 * 와일드카드가 커버하므로 코드 수정 불필요.
+	 * orderbook 라우팅 경로:
+	 *   market-data.exchange (TopicExchange)
+	 *     --[*.orderbook.# / e2e]--> orderbook.hash.exchange (x-consistent-hash)
+	 *     --[routing key 해시]--> orderbook.queue.shard.N
+	 *
+	 * TopicExchange에 샤드 큐를 직접 바인딩하면 동일 routing key 매칭 시 모든 큐에 복제 전달된다.
+	 * x-consistent-hash exchange를 중간에 두어 메시지 1건이 샤드 1개로만 라우팅되도록 보장한다.
 	 * DLQ(Dead Letter Queue) 및 DLX(Dead Letter Exchange) 포함.
 	 *
 	 * @return RabbitMQ 선언 객체 묶음
@@ -105,24 +117,39 @@ public class RabbitMqConfig {
 	public Declarables marketDataTopology() {
 		TopicExchange exchange = new TopicExchange(exchangeName, true, false);
 
-		Queue tickerQueue    = new Queue("ticker.queue", true);
-		Queue tradeQueue     = new Queue("trade.queue", true);
-		Queue orderBookQueue = new Queue("orderbook.queue", true);
+		Queue tickerQueue = new Queue("ticker.queue", true);
+		Queue tradeQueue  = new Queue("trade.queue", true);
 
-		Binding tickerBinding    = BindingBuilder.bind(tickerQueue).to(exchange).with(tickerRoutingKey);
-		Binding tradeBinding     = BindingBuilder.bind(tradeQueue).to(exchange).with(tradeRoutingKey);
-		Binding orderBookBinding = BindingBuilder.bind(orderBookQueue).to(exchange).with(orderBookRoutingKey);
+		Binding tickerBinding = BindingBuilder.bind(tickerQueue).to(exchange).with(tickerRoutingKey);
+		Binding tradeBinding  = BindingBuilder.bind(tradeQueue).to(exchange).with(tradeRoutingKey);
+
+		// orderbook: TopicExchange → hashExchange → 샤드 큐
+		CustomExchange hashExchange = new CustomExchange(
+			"orderbook.hash.exchange", "x-consistent-hash", true, false);
+		Binding e2eBinding = new Binding(
+			"orderbook.hash.exchange", Binding.DestinationType.EXCHANGE,
+			exchangeName, orderBookRoutingKey, null);
 
 		DirectExchange dlx = new DirectExchange(dlqExchangeName, true, false);
 		Queue dlq = new Queue(dlqQueueName, true);
 		Binding dlqBinding = BindingBuilder.bind(dlq).to(dlx).with(dlqRoutingKey);
 
-		return new Declarables(
+		List<Declarable> all = new ArrayList<>(List.of(
 			exchange,
-			tickerQueue, tradeQueue, orderBookQueue,
-			tickerBinding, tradeBinding, orderBookBinding,
+			tickerQueue, tradeQueue,
+			tickerBinding, tradeBinding,
+			hashExchange, e2eBinding,
 			dlx, dlq, dlqBinding
-		);
+		));
+
+		for (int i = 0; i < orderBookShardCount; i++) {
+			Queue shard = new Queue("orderbook.queue.shard." + i, true);
+			Binding shardBinding = BindingBuilder.bind(shard).to(hashExchange).with("1").noargs();
+			all.add(shard);
+			all.add(shardBinding);
+		}
+
+		return new Declarables(all);
 	}
 
 	/**
@@ -231,9 +258,28 @@ public class RabbitMqConfig {
 	}
 
 	/**
+	 * orderbook 샤드 큐 이름 배열을 반환한다.
+	 *
+	 * shard-count 설정값만 바꾸면 토폴로지 선언과 @RabbitListener 구독 대상이 함께 변경된다.
+	 *
+	 * @RabbitListener(queues = "#{@orderbookShardQueues}", containerFactory = "orderBookContainerFactory")
+	 *
+	 * @return 샤드 큐 이름 배열
+	 */
+	@Bean
+	public String[] orderbookShardQueues() {
+		String[] queues = new String[orderBookShardCount];
+		for (int i = 0; i < orderBookShardCount; i++) {
+			queues[i] = "orderbook.queue.shard." + i;
+		}
+		return queues;
+	}
+
+	/**
 	 * orderbook 전용 컨테이너 팩토리를 생성한다.
 	 *
-	 * @RabbitListener(queues = "orderbook.queue", containerFactory = "orderBookContainerFactory")
+	 * 샤드 큐 목록을 하나의 배치 리스너로 처리한다.
+	 * workers 수는 모든 샤드를 구독하는 총 consumer 수이며, 샤드 수와 무관하게 유지한다.
 	 *
 	 * @param connectionFactory RabbitMQ 커넥션 팩토리
 	 * @return 리스너 컨테이너 팩토리
@@ -245,12 +291,10 @@ public class RabbitMqConfig {
 		SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
 		factory.setConnectionFactory(connectionFactory);
 		factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
-		factory.setConcurrentConsumers(orderBookConcurrentConsumers);
-		factory.setMaxConcurrentConsumers(orderBookMaxConcurrentConsumers);
+		factory.setConcurrentConsumers(orderBookShardConcurrentConsumers);
+		factory.setMaxConcurrentConsumers(orderBookShardMaxConcurrentConsumers);
 		factory.setPrefetchCount(prefetchCount);
 		factory.setEnforceImmediateAckForManual(true);
-
-		// 배치 설정 추가
 		factory.setBatchListener(true);
 		factory.setConsumerBatchEnabled(true);
 		factory.setBatchSize(orderBookBatchSize);

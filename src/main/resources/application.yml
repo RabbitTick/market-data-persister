@@ -50,8 +50,9 @@ app:
     trade-concurrent-consumers: 2
     trade-max-concurrent-consumers: 4
 
-    orderbook-concurrent-consumers: 12
-    orderbook-max-concurrent-consumers: 12
+    orderbook-shard-count: 5
+    orderbook-shard-concurrent-consumers: 20
+    orderbook-shard-max-concurrent-consumers: 20
 
 management:
   endpoints:
@@ -68,4 +69,3 @@ management:
 logging:
   level:
     com.rabbittick.persister.messaging.MarketDataConsumer: debug
-
