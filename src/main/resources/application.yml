@@ -69,4 +69,5 @@ management:
 logging:
   level:
     com.rabbittick.persister.messaging.MarketDataConsumer: debug
+    com.rabbittick.persister.domain.orderbook.OrderBookServiceImpl: info
 
