@@ -40,9 +40,9 @@ import io.micrometer.core.instrument.Timer;
  * 주요 책임:
  *
  * 데이터타입별 큐 분리에 따른 전용 컨슈머 메서드 제공
- *   ticker.queue    → handleTickerMessage    (tickerContainerFactory)
- *   trade.queue     → handleTradeMessage     (tradeContainerFactory)
- *   orderbook.queue → handleOrderBookMessage (orderBookContainerFactory)
+ *   ticker.queue               → handleTickerMessage    (tickerContainerFactory)
+ *   trade.queue                → handleTradeMessage     (tradeContainerFactory)
+ *   orderbook.queue.shard.0~N → handleOrderBookMessage (orderBookContainerFactory)
  * 수신 메시지 역직렬화
  * DB 저장 처리 및 Ack/Nack 정책 적용
  * 예외 및 멱등성 처리 로그 기록
@@ -141,9 +141,10 @@ public class MarketDataConsumer {
 	}
 
     /**
-     * orderbook.queue 배치 컨슈머.
+     * orderbook 샤드 큐 배치 컨슈머.
      *
-     * <p>컨테이너가 prefetch로 미리 가져온 메시지를 최대 batchSize건 모아서 호출한다.
+     * <p>3개 샤드 큐(orderbook.queue.shard.0~N)를 단일 배치 리스너로 처리한다.
+     * 컨테이너가 prefetch로 미리 가져온 메시지를 최대 batchSize건 모아서 호출한다.
      * burst 구간에서는 batchSize에 빠르게 도달하고, 평상시에는 receiveTimeout(1초)
      * 이후 그 시점까지 수신된 건수로 호출된다.
      *
@@ -159,7 +160,7 @@ public class MarketDataConsumer {
      * @throws IOException basicAck 실패 시
      */
     @RabbitListener(
-            queues = "orderbook.queue",
+            queues = "#{@orderbookShardQueues}",
             containerFactory = "orderBookContainerFactory"
     )
     public void handleOrderBookMessage(List<Message> messages, Channel channel) throws IOException {
