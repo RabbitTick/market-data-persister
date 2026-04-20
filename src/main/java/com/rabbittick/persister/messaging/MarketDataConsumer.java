@@ -6,7 +6,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -143,7 +145,7 @@ public class MarketDataConsumer {
     /**
      * orderbook 샤드 큐 배치 컨슈머.
      *
-     * <p>3개 샤드 큐(orderbook.queue.shard.0~N)를 단일 배치 리스너로 처리한다.
+     * <p>3개 샤드 큐(orderbook.queue.shard.0~2)를 단일 배치 리스너로 처리한다.
      * 컨테이너가 prefetch로 미리 가져온 메시지를 최대 batchSize건 모아서 호출한다.
      * burst 구간에서는 batchSize에 빠르게 도달하고, 평상시에는 receiveTimeout(1초)
      * 이후 그 시점까지 수신된 건수로 호출된다.
@@ -168,9 +170,8 @@ public class MarketDataConsumer {
             return;
         }
 
-        List<OrderBookPayload> payloads = new ArrayList<>();
+        Map<String, List<OrderBookPayload>> payloadsByExchange = new LinkedHashMap<>();
         long lastDeliveryTag = 0;
-        String exchange = "UPBIT"; // 파싱 실패 시 fallback용 기본값
 
         for (Message message : messages) {
             lastDeliveryTag = message.getMessageProperties().getDeliveryTag();
@@ -182,10 +183,8 @@ public class MarketDataConsumer {
                         normalizedJson,
                         new TypeReference<MarketDataMessage<OrderBookPayload>>() {}
                 );
-                if (payloads.isEmpty()) {
-                    exchange = msg.getMetadata().getExchange();
-                }
-                payloads.add(msg.getPayload());
+                String exchange = msg.getMetadata().getExchange();
+                payloadsByExchange.computeIfAbsent(exchange, k -> new ArrayList<>()).add(msg.getPayload());
             } catch (Exception e) {
                 log.warn("[배치] OrderBook 파싱 실패, DLQ 발행 후 계속 처리. body={}", body, e);
                 publishToDlq(message, e);
@@ -193,7 +192,9 @@ public class MarketDataConsumer {
             }
         }
 
-        if (!payloads.isEmpty()) {
+        for (Map.Entry<String, List<OrderBookPayload>> entry : payloadsByExchange.entrySet()) {
+            String exchange = entry.getKey();
+            List<OrderBookPayload> payloads = entry.getValue();
             Timer.Sample persistSample = Timer.start(meterRegistry);
             try {
                 orderBookService.saveOrderBookBatch(exchange, payloads);
@@ -201,18 +202,18 @@ public class MarketDataConsumer {
                         .tags("dataType", "orderbook", "outcome", "success")
                         .register(meterRegistry));
                 recordBatchOutcome("orderbook", "success");
-                log.debug("[배치] OrderBook {}건 저장 완료", payloads.size());
+                log.debug("[배치] OrderBook {}건 저장 완료 (exchange={})", payloads.size(), exchange);
             } catch (DataIntegrityViolationException e) {
                 persistSample.stop(Timer.builder(METRIC_PERSIST_LATENCY)
                         .tags("dataType", "orderbook", "outcome", "duplicate")
                         .register(meterRegistry));
-                log.warn("[배치] OrderBook 배치 내 중복 데이터. size={}", payloads.size(), e);
+                log.warn("[배치] OrderBook 배치 내 중복 데이터. exchange={}, size={}", exchange, payloads.size(), e);
                 recordBatchOutcome("orderbook", "duplicate");
             } catch (Exception e) {
                 persistSample.stop(Timer.builder(METRIC_PERSIST_LATENCY)
                         .tags("dataType", "orderbook", "outcome", "error")
                         .register(meterRegistry));
-                log.error("[배치] OrderBook 배치 저장 실패. size={}. DLQ로 발행.", payloads.size(), e);
+                log.error("[배치] OrderBook 배치 저장 실패. exchange={}, size={}. DLQ로 발행.", exchange, payloads.size(), e);
                 for (Message message : messages) {
                     publishToDlq(message, e);
                 }
