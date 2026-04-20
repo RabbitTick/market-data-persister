@@ -50,7 +50,7 @@ public class OrderBook {
 	 */
 	@Id
 	@GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "orderbook_seq")
-	@SequenceGenerator(name = "orderbook_seq", sequenceName = "orderbook_seq", allocationSize = 50)
+	@SequenceGenerator(name = "orderbook_seq", sequenceName = "orderbook_seq", allocationSize = 500)
 	private Long id;
 
 	/**

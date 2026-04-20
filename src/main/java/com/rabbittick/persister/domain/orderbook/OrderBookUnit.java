@@ -36,7 +36,7 @@ public class OrderBookUnit {
 	 */
 	@Id
 	@GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "orderbook_unit_seq")
-	@SequenceGenerator(name = "orderbook_unit_seq", sequenceName = "orderbook_unit_seq", allocationSize = 500)
+	@SequenceGenerator(name = "orderbook_unit_seq", sequenceName = "orderbook_unit_seq", allocationSize = 10000)
 	private Long id;
 
 	/**
