@@ -20,7 +20,7 @@ spring:
     username: root
     password: password
     hikari:
-      maximum-pool-size: 20
+      maximum-pool-size: 30
 
   jpa:
     hibernate:
@@ -28,7 +28,7 @@ spring:
     properties:
       hibernate:
         jdbc:
-          batch_size: 50
+          batch_size: 500
           order_inserts: true
 
 app:
@@ -41,14 +41,14 @@ app:
     dlq-queue: market-data.persist.dlq
     dlq-routing-key: market-data.persist.dlq
     retry-max-attempts: 3
-    prefetch-count: 200
-    orderbook-batch-size: 100
+    prefetch-count: 400
+    orderbook-batch-size: 200
 
-    ticker-concurrent-consumers: 2
-    ticker-max-concurrent-consumers: 4
+    ticker-concurrent-consumers: 4
+    ticker-max-concurrent-consumers: 8
 
-    trade-concurrent-consumers: 2
-    trade-max-concurrent-consumers: 4
+    trade-concurrent-consumers: 4
+    trade-max-concurrent-consumers: 8
 
     orderbook-shard-count: 5
     orderbook-shard-concurrent-consumers: 20
@@ -69,3 +69,4 @@ management:
 logging:
   level:
     com.rabbittick.persister.messaging.MarketDataConsumer: debug
+
