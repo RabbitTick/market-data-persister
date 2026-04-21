@@ -1,21 +1,21 @@
 package com.rabbittick.persister.domain.orderbook;
 
 import com.rabbittick.persister.global.dto.MarketDataMessage;
-import com.rabbittick.persister.global.dto.OrderBookPayload;
+import com.rabbittick.persister.global.dto.OrderbookPayload;
 
 import java.util.List;
 
 /**
  * 호가 저장 도메인 서비스 인터페이스.
  */
-public interface OrderBookService {
+public interface OrderbookService {
 	
 	/**
 	 * 호가 메시지를 저장한다.
 	 *
 	 * @param message 표준 시장 데이터 메시지
 	 */
-	void saveOrderBook(MarketDataMessage<OrderBookPayload> message);
+	void saveOrderbook(MarketDataMessage<OrderbookPayload> message);
 
 	/**
 	 * 호가 payload 목록을 배치로 저장한다.
@@ -23,5 +23,5 @@ public interface OrderBookService {
 	 * @param exchange 거래소 이름
 	 * @param payloads 호가 payload 목록
 	 */
-	void saveOrderBookBatch(String exchange, List<OrderBookPayload> payloads);
+	void saveOrderbookBatch(String exchange, List<OrderbookPayload> payloads);
 }

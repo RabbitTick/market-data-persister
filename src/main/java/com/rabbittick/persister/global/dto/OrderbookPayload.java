@@ -21,7 +21,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class OrderBookPayload {
+public class OrderbookPayload {
 	
 	/**
 	 * 마켓 코드 (예: KRW-BTC).
@@ -46,5 +46,5 @@ public class OrderBookPayload {
 	/**
 	 * 호가 단위 목록.
 	 */
-	private List<OrderBookUnitPayload> orderbookUnits;
+	private List<OrderbookUnitPayload> orderbookUnits;
 }

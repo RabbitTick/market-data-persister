@@ -14,7 +14,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class OrderBookUnitPayload {
+public class OrderbookUnitPayload {
 	
 	/**
 	 * 매도 호가 가격.

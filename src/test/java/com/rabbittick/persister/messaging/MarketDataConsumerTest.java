@@ -20,13 +20,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.Channel;
 import java.util.List;
 
-import com.rabbittick.persister.domain.orderbook.OrderBookService;
+import com.rabbittick.persister.domain.orderbook.OrderbookService;
 import com.rabbittick.persister.domain.trade.TradeService;
 import com.rabbittick.persister.domain.ticker.TickerService;
 import com.rabbittick.persister.global.dto.MarketDataMessage;
 import com.rabbittick.persister.global.dto.Metadata;
-import com.rabbittick.persister.global.dto.OrderBookPayload;
-import com.rabbittick.persister.global.dto.OrderBookUnitPayload;
+import com.rabbittick.persister.global.dto.OrderbookPayload;
+import com.rabbittick.persister.global.dto.OrderbookUnitPayload;
 import com.rabbittick.persister.global.dto.TickerPayload;
 import com.rabbittick.persister.global.dto.TradePayload;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -42,7 +42,7 @@ class MarketDataConsumerTest {
 	private TradeService tradeService;
 
 	@Mock
-	private OrderBookService orderBookService;
+	private OrderbookService orderbookService;
 
 	@Mock
 	private Channel channel;
@@ -61,7 +61,7 @@ class MarketDataConsumerTest {
 			objectMapper,
 			tickerService,
 			tradeService,
-			orderBookService,
+			orderbookService,
 			meterRegistry
 		);
 	}
@@ -101,7 +101,7 @@ class MarketDataConsumerTest {
 		consumer.handleMarketDataMessage(message, channel);
 
 		// then
-		verify(orderBookService).saveOrderBook(any());
+		verify(orderbookService).saveOrderbook(any());
 		verify(channel).basicAck(11L, false);
 	}
 
@@ -138,7 +138,7 @@ class MarketDataConsumerTest {
 		// given
 		Message message = buildJsonMessage(buildOrderBookMessage("ORDERBOOK"), 12L);
 		doThrow(new DataIntegrityViolationException("duplicate"))
-			.when(orderBookService).saveOrderBook(any());
+			.when(orderbookService).saveOrderbook(any());
 
 		// when
 		consumer.handleMarketDataMessage(message, channel);
@@ -223,7 +223,7 @@ class MarketDataConsumerTest {
 		consumer.handleMarketDataMessage(message, channel);
 
 		// then
-		verify(orderBookService).saveOrderBook(any());
+		verify(orderbookService).saveOrderbook(any());
 		verify(channel).basicAck(13L, false);
 	}
 
@@ -284,7 +284,7 @@ class MarketDataConsumerTest {
 		return new MarketDataMessage<>(metadata, payload);
 	}
 
-	private MarketDataMessage<OrderBookPayload> buildOrderBookMessage(String dataType) {
+	private MarketDataMessage<OrderbookPayload> buildOrderBookMessage(String dataType) {
 		Metadata metadata = Metadata.builder()
 			.messageId("orderbook-message-id")
 			.exchange("UPBIT")
@@ -293,14 +293,14 @@ class MarketDataConsumerTest {
 			.version("1.0")
 			.build();
 
-		List<OrderBookUnitPayload> units = List.of(
-			OrderBookUnitPayload.builder()
+		List<OrderbookUnitPayload> units = List.of(
+			OrderbookUnitPayload.builder()
 				.askPrice(new BigDecimal("70010000.00"))
 				.askSize(new BigDecimal("1.0"))
 				.bidPrice(new BigDecimal("69990000.00"))
 				.bidSize(new BigDecimal("1.2"))
 				.build(),
-			OrderBookUnitPayload.builder()
+			OrderbookUnitPayload.builder()
 				.askPrice(new BigDecimal("70020000.00"))
 				.askSize(new BigDecimal("0.8"))
 				.bidPrice(new BigDecimal("69980000.00"))
@@ -308,7 +308,7 @@ class MarketDataConsumerTest {
 				.build()
 		);
 
-		OrderBookPayload payload = OrderBookPayload.builder()
+		OrderbookPayload payload = OrderbookPayload.builder()
 			.marketCode("KRW-BTC")
 			.timestamp(1672531200000L)
 			.totalAskSize(new BigDecimal("10.5"))

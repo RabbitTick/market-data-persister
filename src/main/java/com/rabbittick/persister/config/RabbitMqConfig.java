@@ -53,7 +53,7 @@ public class RabbitMqConfig {
 	private String tradeRoutingKey;
 
 	@Value("${app.rabbitmq.routing-key-orderbook:*.orderbook.#}")
-	private String orderBookRoutingKey;
+	private String orderbookRoutingKey;
 
 	@Value("${app.rabbitmq.ticker-concurrent-consumers:2}")
 	private int tickerConcurrentConsumers;
@@ -68,13 +68,13 @@ public class RabbitMqConfig {
 	private int tradeMaxConcurrentConsumers;
 
 	@Value("${app.rabbitmq.orderbook-shard-count:3}")
-	private int orderBookShardCount;
+	private int orderbookShardCount;
 
 	@Value("${app.rabbitmq.orderbook-shard-concurrent-consumers:4}")
-	private int orderBookShardConcurrentConsumers;
+	private int orderbookShardConcurrentConsumers;
 
 	@Value("${app.rabbitmq.orderbook-shard-max-concurrent-consumers:4}")
-	private int orderBookShardMaxConcurrentConsumers;
+	private int orderbookShardMaxConcurrentConsumers;
 
 	@Value("${app.rabbitmq.prefetch-count:50}")
 	private int prefetchCount;
@@ -92,7 +92,7 @@ public class RabbitMqConfig {
 	private int retryMaxAttempts;
 
 	@Value("${app.rabbitmq.orderbook-batch-size:50}")
-	private int orderBookBatchSize;
+	private int orderbookBatchSize;
 
 	/**
 	 * Exchange/Queue/Binding 토폴로지를 생성한다.
@@ -128,7 +128,7 @@ public class RabbitMqConfig {
 			"orderbook.hash.exchange", "x-consistent-hash", true, false);
 		Binding e2eBinding = new Binding(
 			"orderbook.hash.exchange", Binding.DestinationType.EXCHANGE,
-			exchangeName, orderBookRoutingKey, null);
+			exchangeName, orderbookRoutingKey, null);
 
 		DirectExchange dlx = new DirectExchange(dlqExchangeName, true, false);
 		Queue dlq = new Queue(dlqQueueName, true);
@@ -142,7 +142,7 @@ public class RabbitMqConfig {
 			dlx, dlq, dlqBinding
 		));
 
-		for (int i = 0; i < orderBookShardCount; i++) {
+		for (int i = 0; i < orderbookShardCount; i++) {
 			Queue shard = new Queue("orderbook.queue.shard." + i, true);
 			Binding shardBinding = BindingBuilder.bind(shard).to(hashExchange).with("1").noargs();
 			all.add(shard);
@@ -262,14 +262,14 @@ public class RabbitMqConfig {
 	 *
 	 * shard-count 설정값만 바꾸면 토폴로지 선언과 @RabbitListener 구독 대상이 함께 변경된다.
 	 *
-	 * @RabbitListener(queues = "#{@orderbookShardQueues}", containerFactory = "orderBookContainerFactory")
+	 * @RabbitListener(queues = "#{@orderbookShardQueues}", containerFactory = "orderbookContainerFactory")
 	 *
 	 * @return 샤드 큐 이름 배열
 	 */
 	@Bean
 	public String[] orderbookShardQueues() {
-		String[] queues = new String[orderBookShardCount];
-		for (int i = 0; i < orderBookShardCount; i++) {
+		String[] queues = new String[orderbookShardCount];
+		for (int i = 0; i < orderbookShardCount; i++) {
 			queues[i] = "orderbook.queue.shard." + i;
 		}
 		return queues;
@@ -285,19 +285,19 @@ public class RabbitMqConfig {
 	 * @return 리스너 컨테이너 팩토리
 	 */
 	@Bean
-	public SimpleRabbitListenerContainerFactory orderBookContainerFactory(
+	public SimpleRabbitListenerContainerFactory orderbookContainerFactory(
 		ConnectionFactory connectionFactory
 	) {
 		SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
 		factory.setConnectionFactory(connectionFactory);
 		factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
-		factory.setConcurrentConsumers(orderBookShardConcurrentConsumers);
-		factory.setMaxConcurrentConsumers(orderBookShardMaxConcurrentConsumers);
+		factory.setConcurrentConsumers(orderbookShardConcurrentConsumers);
+		factory.setMaxConcurrentConsumers(orderbookShardMaxConcurrentConsumers);
 		factory.setPrefetchCount(prefetchCount);
 		factory.setEnforceImmediateAckForManual(true);
 		factory.setBatchListener(true);
 		factory.setConsumerBatchEnabled(true);
-		factory.setBatchSize(orderBookBatchSize);
+		factory.setBatchSize(orderbookBatchSize);
 		factory.setContainerCustomizer(container -> container.setShutdownTimeout(5000L));
 
 		return factory;

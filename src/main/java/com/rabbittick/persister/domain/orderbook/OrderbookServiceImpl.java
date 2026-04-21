@@ -11,7 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.rabbittick.persister.global.dto.MarketDataMessage;
-import com.rabbittick.persister.global.dto.OrderBookPayload;
+import com.rabbittick.persister.global.dto.OrderbookPayload;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -21,13 +21,13 @@ import lombok.RequiredArgsConstructor;
 
 @Service
 @RequiredArgsConstructor
-public class OrderBookServiceImpl implements OrderBookService {
+public class OrderbookServiceImpl implements OrderbookService {
 
-	private static final Logger log = LoggerFactory.getLogger(OrderBookServiceImpl.class);
+	private static final Logger log = LoggerFactory.getLogger(OrderbookServiceImpl.class);
 	private static final long LOG_INTERVAL = 100;
 
-	private final OrderBookRepository orderBookRepository;
-	private final OrderBookMapper orderBookMapper;
+	private final OrderbookRepository orderbookRepository;
+	private final OrderbookMapper orderbookMapper;
 	private final MeterRegistry meterRegistry;
 
 	@PersistenceContext
@@ -37,30 +37,30 @@ public class OrderBookServiceImpl implements OrderBookService {
 
 	@Override
 	@Transactional
-	public void saveOrderBook(MarketDataMessage<OrderBookPayload> message) {
-		OrderBook orderBook = orderBookMapper.toEntity(message);
-		orderBookRepository.save(orderBook);
+	public void saveOrderbook(MarketDataMessage<OrderbookPayload> message) {
+		Orderbook orderbook = orderbookMapper.toEntity(message);
+		orderbookRepository.save(orderbook);
 	}
 
 	@Override
 	@Transactional
-	public void saveOrderBookBatch(String exchange, List<OrderBookPayload> payloads) {
+	public void saveOrderbookBatch(String exchange, List<OrderbookPayload> payloads) {
 		long t0 = System.nanoTime();
 
-		List<OrderBook> entities = payloads.stream()
-			.map(payload -> orderBookMapper.toEntity(exchange, payload))
+		List<Orderbook> entities = payloads.stream()
+			.map(payload -> orderbookMapper.toEntity(exchange, payload))
 			.collect(Collectors.toList());
 
-		List<OrderBookUnit> allUnits = entities.stream()
+		List<OrderbookUnit> allUnits = entities.stream()
 			.flatMap(ob -> ob.getOrderbookUnits().stream())
 			.collect(Collectors.toList());
 		entities.forEach(ob -> ob.getOrderbookUnits().clear());
 
-		// 1. OrderBook persist → SEQUENCE 채번, id 확보
-		orderBookRepository.saveAll(entities);
+		// 1. Orderbook persist → SEQUENCE 채번, id 확보
+		orderbookRepository.saveAll(entities);
 		long t1 = System.nanoTime();
 
-		// 2. OrderBookUnit persist → order_inserts + batch_size로 배치 flush
+		// 2. OrderbookUnit persist → order_inserts + batch_size로 배치 flush
 		allUnits.forEach(em::persist);
 		long t2 = System.nanoTime();
 

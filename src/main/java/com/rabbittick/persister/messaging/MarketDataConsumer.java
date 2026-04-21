@@ -23,11 +23,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.rabbitmq.client.Channel;
-import com.rabbittick.persister.domain.orderbook.OrderBookService;
+import com.rabbittick.persister.domain.orderbook.OrderbookService;
 import com.rabbittick.persister.domain.trade.TradeService;
 import com.rabbittick.persister.domain.ticker.TickerService;
 import com.rabbittick.persister.global.dto.MarketDataMessage;
-import com.rabbittick.persister.global.dto.OrderBookPayload;
+import com.rabbittick.persister.global.dto.OrderbookPayload;
 import com.rabbittick.persister.global.dto.TickerPayload;
 import com.rabbittick.persister.global.dto.TradePayload;
 
@@ -44,7 +44,7 @@ import io.micrometer.core.instrument.Timer;
  * 데이터타입별 큐 분리에 따른 전용 컨슈머 메서드 제공
  *   ticker.queue               → handleTickerMessage    (tickerContainerFactory)
  *   trade.queue                → handleTradeMessage     (tradeContainerFactory)
- *   orderbook.queue.shard.0~N → handleOrderBookMessage (orderBookContainerFactory)
+ *   orderbook.queue.shard.0~N → handleOrderBookMessage (orderbookContainerFactory)
  * 수신 메시지 역직렬화
  * DB 저장 처리 및 Ack/Nack 정책 적용
  * 예외 및 멱등성 처리 로그 기록
@@ -65,7 +65,7 @@ public class MarketDataConsumer {
 	private final ObjectMapper objectMapper;
 	private final TickerService tickerService;
 	private final TradeService tradeService;
-	private final OrderBookService orderBookService;
+	private final OrderbookService orderbookService;
 	private final MeterRegistry meterRegistry;
     private final RabbitTemplate rabbitTemplate;
     private final String dlqExchangeName;
@@ -77,14 +77,14 @@ public class MarketDataConsumer {
 	 * @param objectMapper JSON 변환기
 	 * @param tickerService 티커 저장 서비스
 	 * @param tradeService 거래 체결 저장 서비스
-	 * @param orderBookService 호가 저장 서비스
+	 * @param orderbookService 호가 저장 서비스
 	 * @param meterRegistry 메트릭 레지스트리
 	 */
 	public MarketDataConsumer(
 		ObjectMapper objectMapper,
 		TickerService tickerService,
 		TradeService tradeService,
-		OrderBookService orderBookService,
+		OrderbookService orderbookService,
 		MeterRegistry meterRegistry,
         RabbitTemplate rabbitTemplate,
         @Value("${app.rabbitmq.dlq-exchange}") String dlqExchangeName,
@@ -93,7 +93,7 @@ public class MarketDataConsumer {
 		this.objectMapper = objectMapper;
 		this.tickerService = tickerService;
 		this.tradeService = tradeService;
-		this.orderBookService = orderBookService;
+		this.orderbookService = orderbookService;
 		this.meterRegistry = meterRegistry;
         this.rabbitTemplate = rabbitTemplate;
         this.dlqExchangeName = dlqExchangeName;
@@ -163,14 +163,14 @@ public class MarketDataConsumer {
      */
     @RabbitListener(
             queues = "#{@orderbookShardQueues}",
-            containerFactory = "orderBookContainerFactory"
+            containerFactory = "orderbookContainerFactory"
     )
     public void handleOrderBookMessage(List<Message> messages, Channel channel) throws IOException {
         if (messages.isEmpty()) {
             return;
         }
 
-        Map<String, List<OrderBookPayload>> payloadsByExchange = new LinkedHashMap<>();
+        Map<String, List<OrderbookPayload>> payloadsByExchange = new LinkedHashMap<>();
         long lastDeliveryTag = 0;
 
         for (Message message : messages) {
@@ -179,9 +179,9 @@ public class MarketDataConsumer {
 
             try {
                 String normalizedJson = normalizeBody(body);
-                MarketDataMessage<OrderBookPayload> msg = objectMapper.readValue(
+                MarketDataMessage<OrderbookPayload> msg = objectMapper.readValue(
                         normalizedJson,
-                        new TypeReference<MarketDataMessage<OrderBookPayload>>() {}
+                        new TypeReference<MarketDataMessage<OrderbookPayload>>() {}
                 );
                 String exchange = msg.getMetadata().getExchange();
                 payloadsByExchange.computeIfAbsent(exchange, k -> new ArrayList<>()).add(msg.getPayload());
@@ -192,12 +192,12 @@ public class MarketDataConsumer {
             }
         }
 
-        for (Map.Entry<String, List<OrderBookPayload>> entry : payloadsByExchange.entrySet()) {
+        for (Map.Entry<String, List<OrderbookPayload>> entry : payloadsByExchange.entrySet()) {
             String exchange = entry.getKey();
-            List<OrderBookPayload> payloads = entry.getValue();
+            List<OrderbookPayload> payloads = entry.getValue();
             Timer.Sample persistSample = Timer.start(meterRegistry);
             try {
-                orderBookService.saveOrderBookBatch(exchange, payloads);
+                orderbookService.saveOrderbookBatch(exchange, payloads);
                 persistSample.stop(Timer.builder(METRIC_PERSIST_LATENCY)
                         .tags("dataType", "orderbook", "outcome", "success")
                         .register(meterRegistry));

@@ -28,8 +28,8 @@ import lombok.Setter;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
-public class OrderBookUnit {
-	
+public class OrderbookUnit {
+
 	/**
 	 * 내부 식별자 (Surrogate Key).
 	 * SEQUENCE 전략으로 배치 INSERT를 활성화한다.
@@ -41,12 +41,12 @@ public class OrderBookUnit {
 
 	/**
 	 * 연관관계 주인.
-	 * OrderBook.addUnit()에서 setOrderBook() 호출을 위해 @Setter를 적용한다.
+	 * Orderbook.addUnit()에서 setOrderbook() 호출을 위해 @Setter를 적용한다.
 	 */
 	@Setter
 	@ManyToOne(fetch = FetchType.LAZY)
 	@JoinColumn(name = "orderbook_id")
-	private OrderBook orderBook;
+	private Orderbook orderbook;
 
 	/**
 	 * 매도 호가 가격.

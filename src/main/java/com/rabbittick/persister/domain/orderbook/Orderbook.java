@@ -43,7 +43,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
-public class OrderBook {
+public class Orderbook {
 
 	/**
 	 * 내부 식별자 (Surrogate Key).
@@ -86,9 +86,9 @@ public class OrderBook {
 	/**
 	 * 호가 단위 목록.
 	 */
-	@OneToMany(mappedBy = "orderBook", cascade = CascadeType.ALL, orphanRemoval = true)
+	@OneToMany(mappedBy = "orderbook", cascade = CascadeType.ALL, orphanRemoval = true)
 	@Builder.Default
-	private List<OrderBookUnit> orderbookUnits = new ArrayList<>();
+	private List<OrderbookUnit> orderbookUnits = new ArrayList<>();
 
 	/**
 	 * 데이터 적재 시각.
@@ -103,8 +103,8 @@ public class OrderBook {
 	 *
 	 * @param unit 추가할 호가 단위 엔티티
 	 */
-	public void addUnit(OrderBookUnit unit) {
+	public void addUnit(OrderbookUnit unit) {
 		orderbookUnits.add(unit);
-		unit.setOrderBook(this);
+		unit.setOrderbook(this);
 	}
 }
