@@ -2,6 +2,7 @@ package com.rabbittick.persister.messaging;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,6 +15,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -34,7 +36,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 @ExtendWith(MockitoExtension.class)
 class MarketDataConsumerTest {
-	
+
 	@Mock
 	private TickerService tickerService;
 
@@ -47,10 +49,13 @@ class MarketDataConsumerTest {
 	@Mock
 	private Channel channel;
 
+	@Mock
+	private RabbitTemplate rabbitTemplate;
+
 	private ObjectMapper objectMapper;
 
 	private MarketDataConsumer consumer;
-	
+
 	private MeterRegistry meterRegistry;
 
 	@BeforeEach
@@ -62,7 +67,10 @@ class MarketDataConsumerTest {
 			tickerService,
 			tradeService,
 			orderbookService,
-			meterRegistry
+			meterRegistry,
+			rabbitTemplate,
+			"test-dlq-exchange",
+			"test-dlq-routing-key"
 		);
 	}
 
@@ -72,7 +80,7 @@ class MarketDataConsumerTest {
 		Message message = buildJsonMessage(buildTickerMessage("TICKER"), 1L);
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleTickerMessage(message, channel);
 
 		// then
 		verify(tickerService).saveTicker(any());
@@ -85,7 +93,7 @@ class MarketDataConsumerTest {
 		Message message = buildJsonMessage(buildTradeMessage("TRADE"), 6L);
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleTradeMessage(message, channel);
 
 		// then
 		verify(tradeService).saveTrade(any());
@@ -98,11 +106,11 @@ class MarketDataConsumerTest {
 		Message message = buildJsonMessage(buildOrderBookMessage("ORDERBOOK"), 11L);
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleOrderBookMessage(List.of(message), channel);
 
 		// then
-		verify(orderbookService).saveOrderbook(any());
-		verify(channel).basicAck(11L, false);
+		verify(orderbookService).saveOrderbookBatch(anyString(), any());
+		verify(channel).basicAck(11L, true);
 	}
 
 	@Test
@@ -113,7 +121,7 @@ class MarketDataConsumerTest {
 			.when(tickerService).saveTicker(any());
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleTickerMessage(message, channel);
 
 		// then
 		verify(channel).basicAck(2L, false);
@@ -127,7 +135,7 @@ class MarketDataConsumerTest {
 			.when(tradeService).saveTrade(any());
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleTradeMessage(message, channel);
 
 		// then
 		verify(channel).basicAck(8L, false);
@@ -138,38 +146,13 @@ class MarketDataConsumerTest {
 		// given
 		Message message = buildJsonMessage(buildOrderBookMessage("ORDERBOOK"), 12L);
 		doThrow(new DataIntegrityViolationException("duplicate"))
-			.when(orderbookService).saveOrderbook(any());
+			.when(orderbookService).saveOrderbookBatch(anyString(), any());
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleOrderBookMessage(List.of(message), channel);
 
 		// then
-		verify(channel).basicAck(12L, false);
-	}
-
-	@Test
-	void handleMessage_ackOnUnsupportedType() throws Exception {
-		// given
-		Message message = buildJsonMessage(buildTickerMessage("UNKNOWN"), 9L);
-
-		// when
-		consumer.handleMarketDataMessage(message, channel);
-
-		// then
-		verify(tickerService, never()).saveTicker(any());
-		verify(channel).basicAck(9L, false);
-	}
-
-	@Test
-	void handleMessage_ackOnMissingDataType() throws Exception {
-		// given
-		Message message = buildJsonMessage(buildTickerMessage(null), 10L);
-
-		// when
-		consumer.handleMarketDataMessage(message, channel);
-
-		// then
-		verify(channel).basicAck(10L, false);
+		verify(channel).basicAck(12L, true);
 	}
 
 	@Test
@@ -178,7 +161,7 @@ class MarketDataConsumerTest {
 		Message message = buildRawMessage("{invalid-json", 4L);
 
 		// when & then
-		assertThatThrownBy(() -> consumer.handleMarketDataMessage(message, channel))
+		assertThatThrownBy(() -> consumer.handleTickerMessage(message, channel))
 			.isInstanceOf(RuntimeException.class);
 	}
 
@@ -190,7 +173,7 @@ class MarketDataConsumerTest {
 		Message message = buildRawMessage(wrapped, 5L);
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleTickerMessage(message, channel);
 
 		// then
 		verify(tickerService).saveTicker(any());
@@ -205,7 +188,7 @@ class MarketDataConsumerTest {
 		Message message = buildRawMessage(wrapped, 7L);
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleTradeMessage(message, channel);
 
 		// then
 		verify(tradeService).saveTrade(any());
@@ -220,11 +203,11 @@ class MarketDataConsumerTest {
 		Message message = buildRawMessage(wrapped, 13L);
 
 		// when
-		consumer.handleMarketDataMessage(message, channel);
+		consumer.handleOrderBookMessage(List.of(message), channel);
 
 		// then
-		verify(orderbookService).saveOrderbook(any());
-		verify(channel).basicAck(13L, false);
+		verify(orderbookService).saveOrderbookBatch(anyString(), any());
+		verify(channel).basicAck(13L, true);
 	}
 
 	private MarketDataMessage<TickerPayload> buildTickerMessage(String dataType) {
